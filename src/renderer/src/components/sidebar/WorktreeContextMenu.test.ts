@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  canAssignClaudeAccountsToWorktrees,
   hasSleepableWorkspaceActivity,
   isContextWorktreeDeletable,
   shouldUseNativeContextMenu,
@@ -14,7 +15,24 @@ import {
   planWorkspaceStatusAssignment,
   selectMenuScopedMap
 } from './WorktreeContextMenu'
-import type { Worktree, WorktreeLineage, WorkspaceStatusDefinition } from '../../../../shared/types'
+import type {
+  Repo,
+  Worktree,
+  WorktreeLineage,
+  WorkspaceStatusDefinition
+} from '../../../../shared/types'
+
+describe('Claude account assignment ownership', () => {
+  const repo = { id: 'repo-1', executionHostId: 'local' } as Repo
+  const worktree = { id: 'repo-1::/workspace', repoId: 'repo-1' } as Worktree
+
+  it('keeps account discovery and assignment out of paired web menus', () => {
+    const repos = new Map([[repo.id, repo]])
+
+    expect(canAssignClaudeAccountsToWorktrees([worktree], repos, false)).toBe(true)
+    expect(canAssignClaudeAccountsToWorktrees([worktree], repos, true)).toBe(false)
+  })
+})
 
 describe('selectMenuScopedMap (delete-teardown re-render guard)', () => {
   // Why: the closed menu wrapper must stay inert to delete teardown's high-churn

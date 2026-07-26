@@ -7,6 +7,7 @@ import {
 } from './types'
 import type { CreateOrAttachOptions, CreateOrAttachResult } from './terminal-host-create-contract'
 import type { TerminalHostOptions } from './terminal-host-options'
+import { requiredPtyReattachUnavailableMessage } from '../providers/pty-reattach-contract'
 import { shutdownTerminalHostSessions } from './terminal-host-session-shutdown'
 import { TerminalSessionTeardown } from './terminal-session-teardown'
 import { ClaimedAgentPtyOwnerRegistry } from '../../shared/claimed-agent-pty-owner'
@@ -56,6 +57,20 @@ export class TerminalHost {
       createOrAttach: async (options) => {
         if (options.agentSessionGeneration && this.sessions.get(options.sessionId)?.isAlive) {
           throw new Error('agent_session_claim_unavailable')
+        }
+        if (options.requireReattach) {
+          const existing = this.sessions.get(options.sessionId)
+          const canReattach =
+            Boolean(existing?.isAlive) &&
+            !existing?.isTerminating &&
+            !this.sessionTeardown.get(options.sessionId)
+          if (!canReattach) {
+            if (existing) {
+              existing.dispose()
+              this.sessions.delete(options.sessionId)
+            }
+            throw new Error(requiredPtyReattachUnavailableMessage(options.sessionId))
+          }
         }
         return await createOrAttachTerminalSession(options, {
           sessions: this.sessions,

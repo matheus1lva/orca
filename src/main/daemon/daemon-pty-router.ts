@@ -8,6 +8,7 @@ import type {
   PtySpawnResult
 } from '../providers/types'
 import type { PtyIncarnationId } from '../../shared/pty-incarnation'
+import { spawnRequiredPtyReattach } from '../providers/required-pty-reattach-routing'
 
 export class DaemonPtyRouter implements IPtyProvider {
   private current: DaemonPtyAdapter
@@ -63,6 +64,9 @@ export class DaemonPtyRouter implements IPtyProvider {
 
   async spawn(opts: PtySpawnOptions): Promise<PtySpawnResult> {
     const adapter = opts.sessionId ? this.sessionAdapters.get(opts.sessionId) : undefined
+    if (opts.requireReattach) {
+      return await spawnRequiredPtyReattach(opts, adapter, this.allAdapters(), this.sessionAdapters)
+    }
     const target = adapter ?? this.current
     const result = await target.spawn(opts)
     // Why: the adapter filters intentional recovery exits and canonical-ID races before publishing proof.

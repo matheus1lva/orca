@@ -71,6 +71,7 @@ import {
   getSettingsFocusedExecutionHostId,
   LOCAL_EXECUTION_HOST_ID,
   parseExecutionHostId,
+  toRuntimeExecutionHostId,
   toSshExecutionHostId,
   type ExecutionHostId
 } from '../../../../shared/execution-host'
@@ -89,6 +90,10 @@ import {
   parseWorkspaceKey,
   worktreeWorkspaceKey
 } from '../../../../shared/workspace-scope'
+import {
+  hasClaudeAccountPinUpdate,
+  runLegacyWorktreeMetaUpdates
+} from '@/runtime/runtime-worktree-meta-fallback'
 import { folderWorkspaceToWorktree } from '../../../../shared/folder-workspace-worktree'
 import {
   CLIENT_WORKTREE_CREATE_MAX_ATTEMPTS,
@@ -3023,6 +3028,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
     options
   ) => {
     const automationProvenanceRequest = options?.automationProvenanceRequest
+    const claudeAccountId = options?.claudeAccountId
     try {
       for (let attempt = 0; attempt < CLIENT_WORKTREE_CREATE_MAX_ATTEMPTS; attempt += 1) {
         const candidateName = getClientWorktreeCreateCandidate(name, attempt)
@@ -3065,6 +3071,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
             ...(manualOrder !== undefined ? { manualOrder } : {}),
             ...(parentWorkspace ? { parentWorkspace } : {}),
             ...(workspaceStatus !== undefined ? { workspaceStatus } : {}),
+            ...(claudeAccountId !== undefined ? { claudeAccountId } : {}),
             ...(linkedGitLabMR !== undefined ? { linkedGitLabMR } : {}),
             ...(linkedGitLabIssue !== undefined ? { linkedGitLabIssue } : {}),
             ...(linkedBitbucketPR !== undefined ? { linkedBitbucketPR } : {}),
@@ -3110,6 +3117,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
                     ...(manualOrder !== undefined ? { manualOrder } : {}),
                     ...(parentWorkspace ? { parentWorkspace } : {}),
                     ...(workspaceStatus !== undefined ? { workspaceStatus } : {}),
+                    ...(claudeAccountId !== undefined ? { claudeAccountId } : {}),
                     ...(linkedGitLabMR !== undefined ? { linkedGitLabMR } : {}),
                     ...(linkedGitLabIssue !== undefined ? { linkedGitLabIssue } : {}),
                     ...(linkedBitbucketPR !== undefined ? { linkedBitbucketPR } : {}),
@@ -4045,24 +4053,92 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
           }
     })
 
-    await Promise.all(
-      Array.from(updatesByWorktreeId, async ([worktreeId, updates]) => {
-        try {
-          await persistWorktreeMeta(
-            settingsForWorktreeOwner(get(), worktreeId),
-            worktreeId,
-            updates
+    const localUpdates: { worktreeId: string; updates: Partial<WorktreeMeta> }[] = []
+    const remoteUpdatesByEnvironment = new Map<
+      string,
+      { worktreeId: string; updates: Partial<WorktreeMeta> }[]
+    >()
+    for (const [worktreeId, updates] of updatesByWorktreeId) {
+      const settings = settingsForWorktreeOwner(get(), worktreeId)
+      const target = getActiveRuntimeTarget(settings)
+      if (target.kind === 'local') {
+        localUpdates.push({ worktreeId, updates })
+      } else {
+        const entries = remoteUpdatesByEnvironment.get(target.environmentId) ?? []
+        entries.push({ worktreeId, updates })
+        remoteUpdatesByEnvironment.set(target.environmentId, entries)
+      }
+    }
+
+    const refreshAfterFailure = (worktreeIds: readonly string[], err: unknown): void => {
+      console.error('Failed to update worktree meta:', err)
+      for (const repoId of new Set(worktreeIds.map(getRepoIdFromWorktreeId))) {
+        void get().fetchWorktrees(repoId)
+      }
+    }
+
+    await Promise.all([
+      localUpdates.length > 0
+        ? window.api.worktrees.updateMetaBatch({ updates: localUpdates }).catch((err) =>
+            refreshAfterFailure(
+              localUpdates.map((entry) => entry.worktreeId),
+              err
+            )
           )
+        : Promise.resolve(),
+      ...Array.from(remoteUpdatesByEnvironment, async ([environmentId, entries]) => {
+        try {
+          const target = { kind: 'environment' as const, environmentId }
+          const runtimeUpdates = entries.map(({ worktreeId, updates }) => ({
+            worktree: toRuntimeWorktreeSelector(worktreeId),
+            ...encodePushTargetClearForRuntimeRpc(updates)
+          }))
+          try {
+            await callRuntimeRpc(
+              target,
+              'worktree.setBatch',
+              { updates: runtimeUpdates },
+              {
+                timeoutMs: 15_000
+              }
+            )
+          } catch (error) {
+            if (!isRuntimeMethodNotFoundError(error)) {
+              throw error
+            }
+            if (runtimeUpdates.some(hasClaudeAccountPinUpdate)) {
+              // Why: pre-account runtimes accept worktree.set but discard the
+              // unknown pin field, which would turn optimistic UI into unsafe auth.
+              throw error
+            }
+            // Why: compatible older SSH/runtime hosts predate setBatch; preserve
+            // their established per-row worktree.set behavior during upgrades.
+            await runLegacyWorktreeMetaUpdates(runtimeUpdates, (runtimeUpdate) =>
+              callRuntimeRpc(target, 'worktree.set', runtimeUpdate, { timeoutMs: 15_000 })
+            )
+          }
         } catch (err) {
           if (isRuntimeSelectorNotFoundError(err)) {
-            void get().fetchWorktrees(getRepoIdFromWorktreeId(worktreeId))
+            for (const repoId of new Set(
+              entries.map(({ worktreeId }) => getRepoIdFromWorktreeId(worktreeId))
+            )) {
+              void get().fetchWorktrees(repoId, {
+                executionHostId: toRuntimeExecutionHostId(environmentId)
+              })
+            }
             return
           }
           console.error('Failed to update worktree meta:', err)
-          void get().fetchWorktrees(getRepoIdFromWorktreeId(worktreeId))
+          for (const repoId of new Set(
+            entries.map(({ worktreeId }) => getRepoIdFromWorktreeId(worktreeId))
+          )) {
+            void get().fetchWorktrees(repoId, {
+              executionHostId: toRuntimeExecutionHostId(environmentId)
+            })
+          }
         }
       })
-    )
+    ])
   },
 
   setWorktreesPinnedAndReveal: (worktreeIds, isPinned) => {

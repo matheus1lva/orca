@@ -1,9 +1,11 @@
 import type { DaemonPtyAdapter } from './daemon-pty-adapter'
 import { shutdownDegradedFallbackSessions } from './degraded-daemon-fallback-shutdown'
+import { subscribeToDegradedDaemonReplay } from './degraded-daemon-replay-subscription'
 import { inspectPtyProviderProcess } from '../providers/pty-process-inspection'
 import type { IPtyProvider, PtyBackgroundStreamEvent } from '../providers/types'
 import type { PtyDataEvent, PtyProviderBufferSnapshot } from '../providers/types'
 import type { PtyProcessInfo, PtySpawnOptions, PtySpawnResult } from '../providers/types'
+import { spawnRequiredPtyReattach } from '../providers/required-pty-reattach-routing'
 
 export class DegradedDaemonPtyProvider implements IPtyProvider {
   readonly routesFreshSpawnsToLocalProvider = true
@@ -59,6 +61,14 @@ export class DegradedDaemonPtyProvider implements IPtyProvider {
 
   async spawn(opts: PtySpawnOptions): Promise<PtySpawnResult> {
     const mapped = opts.sessionId ? this.sessionProviders.get(opts.sessionId) : undefined
+    if (opts.requireReattach) {
+      return await spawnRequiredPtyReattach(
+        opts,
+        mapped,
+        this.allProviders(),
+        this.sessionProviders
+      )
+    }
     const target = mapped ?? this.fallback
     const result = await target.spawn(opts)
     this.sessionProviders.set(result.id, target)
@@ -207,23 +217,7 @@ export class DegradedDaemonPtyProvider implements IPtyProvider {
   }
 
   onReplay(callback: (payload: { id: string; data: string }) => void): () => void {
-    const unsubscribes = this.allProviders().map((provider) => provider.onReplay(callback))
-    let active = true
-    const trackedUnsubscribe = (): void => {
-      if (!active) {
-        return
-      }
-      active = false
-      const idx = this.unsubscribers.indexOf(trackedUnsubscribe)
-      if (idx !== -1) {
-        this.unsubscribers.splice(idx, 1)
-      }
-      for (const unsubscribe of unsubscribes) {
-        unsubscribe()
-      }
-    }
-    this.unsubscribers.push(trackedUnsubscribe)
-    return trackedUnsubscribe
+    return subscribeToDegradedDaemonReplay(this.allProviders(), this.unsubscribers, callback)
   }
 
   onExit(callback: (payload: { id: string; code: number }) => void): () => void {

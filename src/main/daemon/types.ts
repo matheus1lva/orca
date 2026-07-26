@@ -56,6 +56,8 @@ export type CreateOrAttachRequest = {
   type: 'createOrAttach'
   payload: {
     sessionId: string
+    /** Reject atomically when the named live session does not exist. */
+    requireReattach?: boolean
     cols: number
     rows: number
     cwd?: string

@@ -1262,7 +1262,9 @@
         "addSshHostHint": "Use an existing machine over SSH",
         "addRemoteOrcaServer": "Add Remote Orca Server",
         "addRemoteOrcaServerHint": "Pair another Orca runtime",
-        "hostConnectionFailed": "Connection failed"
+        "hostConnectionFailed": "Connection failed",
+        "claudeAccount": "账户",
+        "claudeAccountInheritGlobal": "继承全局设置"
       },
       "NewWorkspaceComposerModal": {
         "createWorktree": "创建工作树",
@@ -4346,7 +4348,10 @@
           "setParentWorkspace": "设置父工作树...",
           "workspaceSection": "工作区",
           "primaryDeleteDisabled": "主工作树不能删除。请改为移除项目。",
-          "deleteWorktree": "删除工作树"
+          "deleteWorktree": "删除工作树",
+          "assignAccountsTo": "分配账户",
+          "assignAccount": "分配账户",
+          "inheritGlobalAccount": "继承全局设置"
         },
         "WorktreeList": {
           "d880ea0744": "创建一个组并将该项目移入其中。",

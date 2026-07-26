@@ -8,6 +8,7 @@ import { HistoryReader, type ColdRestoreInfo } from './history-reader'
 import { mintPtySessionId, parsePtySessionId } from './pty-session-id'
 import { supportsPtyStartupBarrier } from './shell-ready'
 import { CODEX_SHELL_READY_TIMEOUT_MS } from './session'
+import { requiredPtyReattachUnavailableMessage } from '../providers/pty-reattach-contract'
 import {
   CLEAN_DISCONNECT_PROTOCOL_VERSION,
   COMPLETION_PROCESS_INSPECTION_PROTOCOL_VERSION,
@@ -271,6 +272,16 @@ export class DaemonPtyAdapter implements IPtyProvider {
       }
     }
 
+    if (opts.requireReattach && this.protocolVersion < 22) {
+      const sessions = await this.listProcesses()
+      if (!sessions.some((session) => session.id === sessionId)) {
+        throw new Error(requiredPtyReattachUnavailableMessage(sessionId))
+      }
+      // Why: older daemons ignore the attach-only wire flag and may create a
+      // replacement process under credentials that do not own this session.
+      throw new Error('The preserved PTY session cannot be safely reattached after this update')
+    }
+
     if (this.killedSessionTombstones.has(sessionId)) {
       throw new TerminalKilledError(sessionId)
     }
@@ -289,7 +300,7 @@ export class DaemonPtyAdapter implements IPtyProvider {
     // Why probe aliveness first: detectColdRestore replays up to ~5MB on the main process, but a live session's snapshot supersedes disk, so the replay would be wasted.
     let restoreInfo: ColdRestoreInfo | null = null
     let restoreSkippedForLiveSession = false
-    if (this.historyReader?.hasRestorableHistory(sessionId)) {
+    if (!opts.requireReattach && this.historyReader?.hasRestorableHistory(sessionId)) {
       if ((await this.getAppliedSize(sessionId)) !== null) {
         restoreSkippedForLiveSession = true
       } else {
@@ -320,6 +331,7 @@ export class DaemonPtyAdapter implements IPtyProvider {
       }
       return this.client.request<CreateOrAttachResult>('createOrAttach', {
         sessionId,
+        ...(opts.requireReattach ? { requireReattach: true } : {}),
         cols: effectiveCols,
         rows: effectiveRows,
         cwd: effectiveCwd,

@@ -35,6 +35,7 @@ import type {
   WorkspaceSessionPatch,
   WorkspaceSessionState
 } from '../../../shared/types'
+import type { ClaudeRateLimitAccountsState } from '../../../shared/types'
 import type { SkillDiscoveryResult } from '../../../shared/skills'
 import type { SkillFreshnessInventory } from '../../../shared/skill-freshness'
 import type { SshConnectionState, SshTarget } from '../../../shared/ssh-types'
@@ -70,6 +71,10 @@ import {
 } from '../../../shared/execution-host'
 import { toRuntimeWorktreeSelector } from '../runtime/runtime-worktree-selector'
 import { callAbortableRuntimeEnvironment } from '../runtime/abortable-runtime-environment-call'
+import {
+  hasClaudeAccountPinUpdate,
+  runLegacyWorktreeMetaUpdates
+} from '../runtime/runtime-worktree-meta-fallback'
 import { normalizeDisabledTuiAgents } from '../../../shared/tui-agent-selection'
 import {
   normalizeTuiAgentArgsRecord,
@@ -773,7 +778,7 @@ function createWebPreloadApi(): Partial<PreloadApi> {
     minimaxCredentials: createMiniMaxCredentialsApi(),
     grokAccounts: createGrokAccountsApi(),
     codexAccounts: createAccountsApi(),
-    claudeAccounts: createAccountsApi(),
+    claudeAccounts: createClaudeAccountsApi(),
     cli: createCliApi(),
     agentHooks: createAgentHooksApi(),
     // Why: the desktop derives this from the host filesystem, which the web
@@ -1564,6 +1569,7 @@ function createWorktreesApi(): NonNullable<Partial<PreloadApi>['worktrees']> {
           : {}),
         parentWorkspace: args.parentWorkspace,
         workspaceStatus: args.workspaceStatus,
+        claudeAccountId: args.claudeAccountId,
         manualOrder: args.manualOrder,
         automationProvenanceRequest: args.automationProvenanceRequest
       })
@@ -1625,6 +1631,32 @@ function createWorktreesApi(): NonNullable<Partial<PreloadApi>['worktrees']> {
         ...rpcUpdates
       })
       return withRuntimeWorktreeOwner(owned.result.worktree, owned.hostId)
+    },
+    updateMetaBatch: async ({ updates }) => {
+      const runtimeUpdates = updates.map(({ worktreeId, updates: worktreeUpdates }) => ({
+        worktree: toRuntimeWorktreeSelector(worktreeId),
+        ...(Object.prototype.hasOwnProperty.call(worktreeUpdates, 'pushTarget') &&
+        worktreeUpdates.pushTarget === undefined
+          ? { ...worktreeUpdates, pushTarget: null }
+          : worktreeUpdates)
+      }))
+      const response = await callRuntimeEnvelope<{ updated: number }>('worktree.setBatch', {
+        updates: runtimeUpdates
+      })
+      if (response.ok) {
+        return
+      }
+      if (response.error.code !== 'method_not_found') {
+        throw new Error(response.error.message)
+      }
+      if (runtimeUpdates.some(hasClaudeAccountPinUpdate)) {
+        throw new Error('Assigning Claude accounts requires a newer Orca host.')
+      }
+      // Why: paired clients can outpace their host during rolling upgrades;
+      // older hosts still support the pre-batch per-worktree method.
+      await runLegacyWorktreeMetaUpdates(runtimeUpdates, (runtimeUpdate) =>
+        callRuntimeResult('worktree.set', runtimeUpdate)
+      )
     },
     listLineage: async () =>
       await callRuntimeResult<{
@@ -2868,6 +2900,14 @@ function createAccountsApi(): never {
     reauthenticate: () => Promise.resolve(empty),
     remove: () => Promise.resolve(empty),
     select: () => Promise.resolve(empty)
+  } as never
+}
+
+function createClaudeAccountsApi(): never {
+  return {
+    ...(createAccountsApi() as NonNullable<Partial<PreloadApi>['claudeAccounts']>),
+    list: async () =>
+      (await callRuntimeResult<{ claude: ClaudeRateLimitAccountsState }>('accounts.list')).claude
   } as never
 }
 

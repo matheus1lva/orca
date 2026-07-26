@@ -11,6 +11,7 @@ import type { PtyIncarnationId } from '../../shared/pty-incarnation'
 
 export type CreateOrAttachOptions = {
   sessionId: string
+  requireReattach?: boolean
   cols: number
   rows: number
   cwd?: string

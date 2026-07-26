@@ -52,6 +52,8 @@ import {
   getAccountsPaneSearchEntries
 } from './accounts-search'
 import { GrokAccountsSection } from './GrokAccountsSection'
+import { getRemoteAccountsPaneScope } from './provider-account-scope'
+import { ProviderHostScopeControl } from './ProviderHostScopeControl'
 import { SearchableSetting } from './SearchableSetting'
 import { AccountsClaudeAccountLaunchEnv } from './AccountsClaudeAccountLaunchEnv'
 import { SettingsRow, SettingsSegmentedControl } from './SettingsFormControls'
@@ -78,6 +80,7 @@ import {
 } from './provider-account-visibility'
 import { translate } from '@/i18n/i18n'
 import { cn } from '@/lib/utils'
+import { isWebClientLocation } from '@/lib/web-client-location'
 import {
   emptyClaudeAccountsState,
   emptyCodexAccountsState,
@@ -351,9 +354,14 @@ export function AccountsPane({
   // (see #7973); every list/select/remove below must scope to it, not host/WSL.
   const isRemoteAccountScope = hasRemoteProviderAccountOwner(settings)
   const activeRuntimeEnvironmentId = settings.activeRuntimeEnvironmentId?.trim() || null
-  const remoteServerLabel = isRemoteAccountScope
+  // Why: keep the real name separate from the prose fallback below; the scope
+  // label must not interpolate the fallback.
+  const remoteServerName = isRemoteAccountScope
     ? (runtimeEnvironments.find((environment) => environment.id === activeRuntimeEnvironmentId)
-        ?.name ??
+        ?.name ?? null)
+    : null
+  const remoteServerLabel = isRemoteAccountScope
+    ? (remoteServerName ??
       translate('auto.components.settings.AccountsPane.remoteServerFallback', 'the remote server'))
     : null
   const accountRuntime: LocalAccountRuntime = isRemoteAccountScope
@@ -370,6 +378,21 @@ export function AccountsPane({
     localAccountRuntime.runtime === 'host' && !navigator.userAgent.includes('Windows')
       ? `${localAccountRuntime.label.charAt(0).toLocaleLowerCase()}${localAccountRuntime.label.slice(1)}`
       : localAccountRuntime.label
+  // Why: users read the remote-scoped list as their desktop accounts being
+  // deleted (#8186); say they are intact and link the default-runtime control.
+  // The web client has no desktop-owned accounts and cannot select Local
+  // desktop, so promising a switch back would be a dead end there.
+  const remoteAccountScopeNotice =
+    isRemoteAccountScope && !isWebClientLocation() ? (
+      <ProviderHostScopeControl
+        labelPrefix={translate(
+          'auto.components.settings.AccountsPane.accountScopePrefix',
+          'Account scope'
+        )}
+        scope={getRemoteAccountsPaneScope(remoteServerName)}
+        className="text-xs"
+      />
+    ) : null
 
   const [codexAccounts, setCodexAccounts] =
     useState<CodexRateLimitAccountsState>(emptyCodexAccountsState)
@@ -887,6 +910,7 @@ export function AccountsPane({
               ) : null}
             </div>
           </div>
+          {remoteAccountScopeNotice}
 
           <div className="space-y-2">
             <button
@@ -1218,6 +1242,7 @@ export function AccountsPane({
               {translate('auto.components.settings.AccountsPane.b0e948a4f9', 'Add Account')}
             </Button>
           </div>
+          {remoteAccountScopeNotice}
 
           <div className="space-y-2">
             <button

@@ -56,6 +56,8 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
+import { ProjectAssignAccountMenu } from './ProjectAssignAccountMenu'
+import { getProjectIdentityKey } from '../../../../shared/project-host-setup-projection'
 import { cn } from '@/lib/utils'
 import type {
   Worktree,
@@ -1473,6 +1475,21 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   const sshConnectedGeneration = useAppStore((s) => s.sshConnectedGeneration)
   const prVisibleRefreshGeneration = useAppStore((s) => s.prVisibleRefreshGeneration)
   const settings = useAppStore((s) => s.settings)
+  const projects = useAppStore((s) => s.projects)
+  const projectByIdentityKey = useMemo(() => {
+    const map = new Map(projects.map((project) => [project.id, project]))
+    for (const project of projects) {
+      for (const repoId of project.sourceRepoIds) {
+        if (!map.has(`repo:${repoId}`)) {
+          map.set(`repo:${repoId}`, project)
+        }
+        if (!map.has(repoId)) {
+          map.set(repoId, project)
+        }
+      }
+    }
+    return map
+  }, [projects])
   const newCardStyle = settings?.experimentalNewWorktreeCardStyle === true
   const reorderRepos = useAppStore((s) => s.reorderRepos)
   const folderBackedProjectGroupIds = useMemo(
@@ -4557,6 +4574,16 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                                 'Project Settings'
                               )}
                             </DropdownMenuItem>
+                            {row.repo ? (
+                              <ProjectAssignAccountMenu
+                                project={
+                                  projectByIdentityKey.get(getProjectIdentityKey(row.repo)) ??
+                                  projectByIdentityKey.get(row.repo.id) ??
+                                  null
+                                }
+                                repo={row.repo}
+                              />
+                            ) : null}
                             <DropdownMenuItem
                               onSelect={() => {
                                 if (row.repo) {

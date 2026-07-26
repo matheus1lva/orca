@@ -41,6 +41,28 @@ export const getAccountsClaudeSearchEntries = createLocalizedCatalog(() => [
       ...translateSearchKeyword('auto.components.settings.accounts.search.c759741d77', 'quota'),
       ...translateSearchKeyword('auto.components.settings.accounts.search.f2d666a886', 'optional')
     ]
+  },
+  {
+    title: translate(
+      'auto.components.settings.accounts.search.claudeAccountLaunchEnv',
+      'Claude Account Launch Env'
+    ),
+    description: translate(
+      'auto.components.settings.accounts.search.claudeAccountLaunchEnvDescription',
+      'Per-account KEY=value pairs applied when that Claude account launches.'
+    ),
+    keywords: [
+      ...translateSearchKeyword('auto.components.settings.accounts.search.e14049e1a8', 'claude'),
+      ...translateSearchKeyword('auto.components.settings.accounts.search.env', 'env'),
+      ...translateSearchKeyword(
+        'auto.components.settings.accounts.search.environment',
+        'environment'
+      ),
+      ...translateSearchKeyword('auto.components.settings.accounts.search.launch', 'launch'),
+      ...translateSearchKeyword('auto.components.settings.accounts.search.skills', 'skills'),
+      ...translateSearchKeyword('auto.components.settings.accounts.search.folders', 'folders'),
+      ...translateSearchKeyword('auto.components.settings.accounts.search.06662af91e', 'account')
+    ]
   }
 ])
 

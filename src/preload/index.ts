@@ -1932,7 +1932,11 @@ const api = {
       accountId: string | null
       runtime?: 'host' | 'wsl'
       wslDistro?: string | null
-    }): Promise<unknown> => ipcRenderer.invoke('claudeAccounts:select', args)
+    }): Promise<unknown> => ipcRenderer.invoke('claudeAccounts:select', args),
+    setLaunchEnv: (args: {
+      accountId: string
+      launchEnv?: Record<string, string> | null
+    }): Promise<unknown> => ipcRenderer.invoke('claudeAccounts:setLaunchEnv', args)
   },
 
   cli: {

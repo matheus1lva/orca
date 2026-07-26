@@ -8,7 +8,7 @@ const {
   rmSync
 } = require('node:fs')
 const { dirname, join, resolve } = require('node:path')
-const { builtinModules, createRequire } = require('node:module')
+const { builtinModules, createRequire, isBuiltin } = require('node:module')
 
 const projectDir = resolve(__dirname, '..')
 const requireFromProject = createRequire(join(projectDir, 'package.json'))
@@ -47,9 +47,13 @@ const PARCEL_WATCHER_PLATFORM_PREFIX_BY_PLATFORM = {
 const TYPE_DECLARATION_ARTIFACT_RE = /\.d\.(?:c|m)?ts(?:\.map)?$/
 const VERSIONED_ONNXRUNTIME_DYLIB_RE = /^libonnxruntime\.\d[\d.]*\.dylib$/
 
+// Why: experimental builtins (e.g. node:sqlite) can load via isBuiltin/require
+// but omit from builtinModules until unflagged — keep both sources.
 const NODE_BUILTINS = new Set([
   ...builtinModules,
-  ...builtinModules.map((moduleName) => `node:${moduleName}`)
+  ...builtinModules.map((moduleName) => `node:${moduleName}`),
+  'sqlite',
+  'node:sqlite'
 ])
 
 function packageNameFromSpecifier(specifier) {
@@ -65,7 +69,8 @@ function isPackagedExternalSpecifier(specifier) {
     !specifier.startsWith('.') &&
     !specifier.startsWith('/') &&
     specifier !== 'electron' &&
-    !NODE_BUILTINS.has(specifier)
+    !NODE_BUILTINS.has(specifier) &&
+    !(typeof isBuiltin === 'function' && isBuiltin(specifier))
   )
 }
 

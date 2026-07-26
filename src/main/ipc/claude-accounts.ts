@@ -23,4 +23,11 @@ export function registerClaudeAccountHandlers(claudeAccounts: ClaudeAccountServi
       return claudeAccounts.selectAccountForTarget(args.accountId, args)
     }
   )
+  ipcMain.handle(
+    'claudeAccounts:setLaunchEnv',
+    (
+      _event,
+      args: { accountId: string; launchEnv?: Record<string, string> | null }
+    ) => claudeAccounts.setAccountLaunchEnv(args.accountId, args.launchEnv)
+  )
 }

@@ -14886,6 +14886,9 @@ export class OrcaRuntimeService {
     if (!this.store?.updateProject) {
       throw new Error('runtime_unavailable')
     }
+    if ('claudeAccountId' in updates) {
+      this.assertCurrentManagedClaudeAccountPins([{ claudeAccountId: updates.claudeAccountId }])
+    }
     const project = this.store.updateProject(projectId, updates)
     if (!project) {
       throw new Error(`Project not found: ${projectId}`)

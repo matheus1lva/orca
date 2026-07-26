@@ -2205,6 +2205,10 @@ export type PreloadApi = {
       runtime?: 'host' | 'wsl'
       wslDistro?: string | null
     }) => Promise<ClaudeRateLimitAccountsState>
+    setLaunchEnv: (args: {
+      accountId: string
+      launchEnv?: Record<string, string> | null
+    }) => Promise<ClaudeRateLimitAccountsState>
   }
   cli: {
     getInstallStatus: () => Promise<CliInstallStatus>

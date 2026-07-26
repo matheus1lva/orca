@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { z } from 'zod'
 import type { Store } from '../persistence'
+import { assertValidClaudeAccountPin } from '../claude-accounts/worktree-account-pin'
 import type {
   BaseRefSearchResult,
   Project,
@@ -690,7 +691,8 @@ const LocalWindowsRuntimePreferenceIpcArgs = z.discriminatedUnion('kind', [
 const ProjectUpdateIpcArgs = z.object({
   projectId: z.string().min(1),
   updates: z.object({
-    localWindowsRuntimePreference: LocalWindowsRuntimePreferenceIpcArgs.optional()
+    localWindowsRuntimePreference: LocalWindowsRuntimePreferenceIpcArgs.optional(),
+    claudeAccountId: z.string().min(1).nullable().optional()
   })
 })
 
@@ -1164,6 +1166,9 @@ export function registerRepoHandlers(mainWindow: BrowserWindow, store: Store): v
       rawArgs,
       'project_update_invalid_args'
     )
+    if ('claudeAccountId' in args.updates) {
+      assertValidClaudeAccountPin(store, args.updates.claudeAccountId)
+    }
     return store.updateProject(args.projectId, args.updates)
   })
 

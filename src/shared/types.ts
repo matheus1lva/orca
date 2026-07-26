@@ -118,6 +118,9 @@ export type Project = {
   gitRemoteIdentity?: GitRemoteIdentity
   /** Local Windows projects inherit the global runtime default unless this override is set. */
   localWindowsRuntimePreference?: LocalWindowsRuntimePreference
+  /** Claude managed account for workspaces in this project that do not pin their own.
+   *  null/undefined = inherit the global host/WSL selection. See worktree.claudeAccountId. */
+  claudeAccountId?: string | null
   sourceRepoIds: string[]
   createdAt: number
   updatedAt: number
@@ -125,7 +128,7 @@ export type Project = {
 
 export type ProjectUpdateArgs = {
   projectId: string
-  updates: Partial<Pick<Project, 'localWindowsRuntimePreference'>>
+  updates: Partial<Pick<Project, 'localWindowsRuntimePreference' | 'claudeAccountId'>>
 }
 
 export type ProjectHostSetupState = 'ready' | 'not-set-up' | 'setting-up' | 'error' | 'unsupported'
@@ -2441,6 +2444,8 @@ export type ClaudeManagedAccount = {
   authMethod: 'subscription-oauth' | 'unknown'
   organizationUuid?: string | null
   organizationName?: string | null
+  /** Extra env for Claude PTYs launched with this managed account (pin or active). */
+  launchEnv?: Record<string, string>
   createdAt: number
   updatedAt: number
   lastAuthenticatedAt: number
@@ -2454,6 +2459,7 @@ export type ClaudeManagedAccountSummary = {
   authMethod: 'subscription-oauth' | 'unknown'
   organizationUuid?: string | null
   organizationName?: string | null
+  launchEnv?: Record<string, string>
   createdAt: number
   updatedAt: number
   lastAuthenticatedAt: number

@@ -192,6 +192,26 @@ describe('electron-builder config', () => {
     }
   })
 
+  it('treats node:sqlite as a runtime builtin, not a packaged node_module', async () => {
+    const resourcesDir = await mkdtemp(join(tmpdir(), 'orca-runtime-sqlite-'))
+    try {
+      await writeFile(join(resourcesDir, 'app.asar'), '', 'utf8')
+
+      const sources = new Map([
+        ['out/main/index.js', 'const { DatabaseSync } = require("node:sqlite")'],
+        ['out/main/agent-hooks/managed-agent-hook-controls.js', '']
+      ])
+      const asar = {
+        listPackage: () => [...sources.keys()],
+        extractFile: (_asarPath, internalPath) => Buffer.from(sources.get(internalPath), 'utf8')
+      }
+
+      expect(() => verifyPackagedMainRuntimeDeps(resourcesDir, asar)).not.toThrow()
+    } finally {
+      await rm(resourcesDir, { recursive: true, force: true })
+    }
+  })
+
   it('normalizes host-specific asar entry separators', () => {
     expect(findAsarEntry(['\\out\\main\\index.js'], 'out/main/index.js')).toBe(
       '\\out\\main\\index.js'

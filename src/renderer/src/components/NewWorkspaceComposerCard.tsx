@@ -1512,8 +1512,8 @@ export default function NewWorkspaceComposerCard({
                 <SelectContent>
                   <SelectItem value={INHERIT_GLOBAL_CLAUDE_ACCOUNT_VALUE}>
                     {translate(
-                      'auto.components.NewWorkspaceComposerCard.claudeAccountInheritGlobal',
-                      'Inherit global'
+                      'auto.components.NewWorkspaceComposerCard.claudeAccountInheritProjectDefault',
+                      'Inherit project default'
                     )}
                   </SelectItem>
                   {claudeAccounts.map((account) => (

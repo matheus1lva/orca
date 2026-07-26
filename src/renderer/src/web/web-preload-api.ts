@@ -2899,7 +2899,8 @@ function createAccountsApi(): never {
     cancelPendingLogin: () => Promise.resolve(false),
     reauthenticate: () => Promise.resolve(empty),
     remove: () => Promise.resolve(empty),
-    select: () => Promise.resolve(empty)
+    select: () => Promise.resolve(empty),
+    setLaunchEnv: () => Promise.resolve(empty)
   } as never
 }
 

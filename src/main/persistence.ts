@@ -3864,6 +3864,13 @@ export class Store {
         )
       }
     }
+    if ('claudeAccountId' in updates) {
+      if (updates.claudeAccountId === undefined || updates.claudeAccountId === null) {
+        project.claudeAccountId = null
+      } else {
+        project.claudeAccountId = updates.claudeAccountId
+      }
+    }
     project.updatedAt = Date.now()
     this.scheduleSave()
     return { ...project }
@@ -6350,14 +6357,19 @@ export class Store {
 
   commitClaudeAccountState(
     settingsUpdates: Partial<GlobalSettings>,
-    worktreeAccountIds: Readonly<Record<string, string | null>>
+    worktreeAccountIds: Readonly<Record<string, string | null>>,
+    projectAccountIds: Readonly<Record<string, string | null>> = {}
   ): void {
     const previousSettings = this.state.settings
     const previousWorktreeMeta = { ...this.state.worktreeMeta }
+    const previousProjects = this.state.projects.map((project) => ({ ...project }))
     try {
       this.updateSettings(settingsUpdates)
       for (const [worktreeId, claudeAccountId] of Object.entries(worktreeAccountIds)) {
         this.setWorktreeMeta(worktreeId, { claudeAccountId })
+      }
+      for (const [projectId, claudeAccountId] of Object.entries(projectAccountIds)) {
+        this.updateProject(projectId, { claudeAccountId })
       }
       // Why: account deletion and its pin cleanup form one crash boundary;
       // neither may resurrect independently after credentials are removed.
@@ -6365,6 +6377,7 @@ export class Store {
     } catch (error) {
       this.state.settings = previousSettings
       this.state.worktreeMeta = previousWorktreeMeta
+      this.state.projects = previousProjects
       this.scheduleSave()
       throw error
     }

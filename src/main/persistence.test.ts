@@ -595,6 +595,36 @@ describe('Store', () => {
     })
   })
 
+  it('persists project Claude account pin across reload', async () => {
+    const project = makeProject({
+      id: 'project-1',
+      sourceRepoIds: ['r1']
+    })
+    writeDataFile({
+      ...getDefaultPersistedState(testState.dir),
+      projects: [project],
+      projectHostSetups: [
+        makeProjectHostSetup({
+          id: 'setup-1',
+          projectId: project.id,
+          repoId: ''
+        })
+      ]
+    })
+    const store = await createStore()
+
+    const updated = store.updateProject('project-1', { claudeAccountId: 'account-a' })
+    expect(updated?.claudeAccountId).toBe('account-a')
+
+    store.updateProject('project-1', { claudeAccountId: null })
+    expect(store.getProjects()[0]?.claudeAccountId).toBeNull()
+
+    store.updateProject('project-1', { claudeAccountId: 'account-b' })
+    store.flush()
+    const reloaded = await createStore()
+    expect(reloaded.getProjects()[0]?.claudeAccountId).toBe('account-b')
+  })
+
   it('migrates legacy WSL agent settings into the global Windows runtime default', async () => {
     writeDataFile({
       schemaVersion: 1,

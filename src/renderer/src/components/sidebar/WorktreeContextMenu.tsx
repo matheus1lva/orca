@@ -933,8 +933,8 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
                     onSelect={() => handleAssignClaudeAccount(null)}
                   >
                     {translate(
-                      'auto.components.sidebar.WorktreeContextMenu.inheritGlobalAccount',
-                      'Inherit global'
+                      'auto.components.sidebar.WorktreeContextMenu.inheritProjectDefaultAccount',
+                      'Inherit project default'
                     )}
                   </DropdownMenuRadioItem>
                   {filteredClaudeAccounts.map((account) => (

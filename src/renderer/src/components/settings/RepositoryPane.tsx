@@ -171,6 +171,10 @@ export function RepositoryPane({
     translate('auto.components.settings.repository.search.094adbe930', 'Default Worktree Base'),
     translate('auto.components.settings.repository.search.443d127b5a', 'Worktree Location'),
     translate('auto.components.settings.repository.search.projectRuntime', 'Project Runtime'),
+    translate(
+      'auto.components.settings.repository.search.projectClaudeAccount',
+      'Default Claude Account'
+    ),
     translate('auto.components.settings.repository.search.c5266c2c9d', 'Remove Project')
   ])
   const identityEntries = allEntries.filter((entry) => identityEntryTitles.has(entry.title))
@@ -190,7 +194,16 @@ export function RepositoryPane({
   const symlinkEntries = allEntries.filter((entry) => entry.title === 'Worktree Shared Paths')
   const sourceControlAiEntries = allEntries.filter((entry) => entry.title === 'Git AI Author')
   const hostSetupEntries = allEntries.filter((entry) => entry.title === 'Available Hosts')
-  const projectRuntimeEntries = allEntries.filter((entry) => entry.title === 'Project Runtime')
+  const projectRuntimeEntries = allEntries.filter(
+    (entry) =>
+      entry.title ===
+        translate('auto.components.settings.repository.search.projectRuntime', 'Project Runtime') ||
+      entry.title ===
+        translate(
+          'auto.components.settings.repository.search.projectClaudeAccount',
+          'Default Claude Account'
+        )
+  )
   const removeProjectLabel =
     confirmingRemove === repo.id ? 'Confirm Remove Project' : 'Remove Project'
 
@@ -330,6 +343,7 @@ export function RepositoryPane({
 
             <RepositoryWindowsRuntimeSection
               repoDisplayName={repo.displayName}
+              repo={repo}
               project={project}
               settings={settings}
               isLocalWindowsProject={isLocalWindowsProject}

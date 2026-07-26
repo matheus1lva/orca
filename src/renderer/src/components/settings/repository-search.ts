@@ -162,6 +162,39 @@ export function getRepositoryPaneSearchEntries(
             ]
           }
         ]),
+    ...(isFolder || getRepoExecutionHostId(repo) !== LOCAL_EXECUTION_HOST_ID
+      ? []
+      : [
+          {
+            title: translate(
+              'auto.components.settings.repository.search.projectClaudeAccount',
+              'Default Claude Account'
+            ),
+            description: translate(
+              'auto.components.settings.repository.search.projectClaudeAccountDescription',
+              'Claude account for workspaces in this project that do not pin their own.'
+            ),
+            keywords: [
+              repo.displayName,
+              ...translateSearchKeyword(
+                'auto.components.settings.repository.search.claude',
+                'claude'
+              ),
+              ...translateSearchKeyword(
+                'auto.components.settings.repository.search.account',
+                'account'
+              ),
+              ...translateSearchKeyword(
+                'auto.components.settings.repository.search.defaultAccount',
+                'default account'
+              ),
+              ...translateSearchKeyword(
+                'auto.components.settings.repository.search.assignAccount',
+                'assign account'
+              )
+            ]
+          }
+        ]),
     ...(isFolder ? [] : getRepositoryGitWorktreeSearchEntries(repo)),
     {
       title: translate('auto.components.settings.repository.search.c5266c2c9d', 'Remove Project'),

@@ -583,6 +583,10 @@ function mergeUpdatedProjectCompatibilityProject(
       project.localWindowsRuntimePreference = localWindowsRuntimePreference
     }
   }
+  if ('claudeAccountId' in updates) {
+    project.claudeAccountId =
+      'claudeAccountId' in updated ? (updated.claudeAccountId ?? null) : (updates.claudeAccountId ?? null)
+  }
   return project
 }
 

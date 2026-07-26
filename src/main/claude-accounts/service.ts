@@ -3,7 +3,7 @@ for login, credential capture, Keychain storage, selection, and rate-limit refre
 import { randomUUID } from 'node:crypto'
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join, relative, resolve, sep } from 'node:path'
 import type {
   ClaudeManagedAccount,
@@ -94,6 +94,47 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`
 }
 
+/** Expand ~ / ~/path in env values so CLAUDE_CONFIG_DIR=~/.claude-work works. */
+export function expandClaudeAccountLaunchEnvValue(
+  value: string,
+  homePath: string = homedir()
+): string {
+  if (value === '~') {
+    return homePath
+  }
+  if (value.startsWith('~/') || value.startsWith('~\\')) {
+    return join(homePath, value.slice(2))
+  }
+  if (value.startsWith('$HOME/') || value.startsWith('$HOME\\')) {
+    return join(homePath, value.slice('$HOME/'.length))
+  }
+  if (value.startsWith('${HOME}/') || value.startsWith('${HOME}\\')) {
+    return join(homePath, value.slice('${HOME}/'.length))
+  }
+  if (value === '$HOME' || value === '${HOME}') {
+    return homePath
+  }
+  return value
+}
+
+export function normalizeClaudeAccountLaunchEnv(
+  value: Record<string, string> | null | undefined,
+  homePath: string = homedir()
+): Record<string, string> {
+  if (!value || typeof value !== 'object') {
+    return {}
+  }
+  const next: Record<string, string> = {}
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    const key = rawKey.trim()
+    if (!key || typeof rawValue !== 'string') {
+      continue
+    }
+    next[key] = expandClaudeAccountLaunchEnvValue(rawValue, homePath)
+  }
+  return next
+}
+
 export class ClaudeAccountService {
   private mutationQueue: Promise<unknown> = Promise.resolve()
   private cancelPendingClaudeLogin: (() => boolean) | null = null
@@ -147,6 +188,26 @@ export class ClaudeAccountService {
 
   cancelPendingLogin(): boolean {
     return this.cancelPendingClaudeLogin?.() ?? false
+  }
+
+  setAccountLaunchEnv(
+    accountId: string,
+    launchEnv: Record<string, string> | null | undefined
+  ): ClaudeRateLimitAccountsState {
+    const account = this.requireAccount(accountId)
+    const normalized = normalizeClaudeAccountLaunchEnv(launchEnv)
+    const nextAccounts = this.store.getSettings().claudeManagedAccounts.map((entry) => {
+      if (entry.id !== account.id) {
+        return entry
+      }
+      if (Object.keys(normalized).length === 0) {
+        const { launchEnv: _removed, ...rest } = entry
+        return { ...rest, updatedAt: Date.now() }
+      }
+      return { ...entry, launchEnv: normalized, updatedAt: Date.now() }
+    })
+    this.store.updateSettings({ claudeManagedAccounts: nextAccounts })
+    return this.getSnapshot()
   }
 
   private serializeMutation<T>(fn: () => Promise<T>): Promise<T> {
@@ -325,6 +386,7 @@ export class ClaudeAccountService {
       account.managedAuthPath
     )
     let restoredPins: Record<string, string | null> = {}
+    let restoredProjectPins: Record<string, string | null> = {}
     let removalCommitted = false
     let credentialRemovalStarted = false
     let affectedRepoIds: string[] = []
@@ -349,16 +411,23 @@ export class ClaudeAccountService {
       const pinnedWorktreeIds = Object.entries(this.store.getAllWorktreeMeta())
         .filter(([, meta]) => meta.claudeAccountId === accountId)
         .map(([worktreeId]) => worktreeId)
+      const pinnedProjectIds = this.store
+        .getProjects()
+        .filter((project) => project.claudeAccountId === accountId)
+        .map((project) => project.id)
       affectedRepoIds = [...new Set(pinnedWorktreeIds.map(getRepoIdFromWorktreeId))]
       const clearedPins = Object.fromEntries(pinnedWorktreeIds.map((id) => [id, null]))
+      const clearedProjectPins = Object.fromEntries(pinnedProjectIds.map((id) => [id, null]))
       restoredPins = Object.fromEntries(pinnedWorktreeIds.map((id) => [id, accountId]))
+      restoredProjectPins = Object.fromEntries(pinnedProjectIds.map((id) => [id, accountId]))
       this.commitClaudeAccountState(
         {
           claudeManagedAccounts: nextAccounts,
           activeClaudeManagedAccountId: nextActiveId,
           activeClaudeManagedAccountIdsByRuntime: nextSelection
         },
-        clearedPins
+        clearedPins,
+        clearedProjectPins
       )
       removalCommitted = true
       this.rateLimits.evictInactiveClaudeCache(accountId)
@@ -403,7 +472,8 @@ export class ClaudeAccountService {
             activeClaudeManagedAccountId: settings.activeClaudeManagedAccountId,
             activeClaudeManagedAccountIdsByRuntime: settings.activeClaudeManagedAccountIdsByRuntime
           },
-          restoredPins
+          restoredPins,
+          restoredProjectPins
         )
       } else {
         this.restoreClaudeSettings(settings)
@@ -476,6 +546,7 @@ export class ClaudeAccountService {
   }
 
   private toSummary(account: ClaudeManagedAccount): ClaudeManagedAccountSummary {
+    const launchEnv = normalizeClaudeAccountLaunchEnv(account.launchEnv)
     return {
       id: account.id,
       email: account.email,
@@ -484,6 +555,7 @@ export class ClaudeAccountService {
       authMethod: account.authMethod ?? 'unknown',
       organizationUuid: account.organizationUuid ?? null,
       organizationName: account.organizationName ?? null,
+      ...(Object.keys(launchEnv).length > 0 ? { launchEnv } : {}),
       createdAt: account.createdAt,
       updatedAt: account.updatedAt,
       lastAuthenticatedAt: account.lastAuthenticatedAt
@@ -541,9 +613,10 @@ export class ClaudeAccountService {
 
   private commitClaudeAccountState(
     settingsUpdates: Parameters<Store['commitClaudeAccountState']>[0],
-    worktreeAccountIds: Parameters<Store['commitClaudeAccountState']>[1]
+    worktreeAccountIds: Parameters<Store['commitClaudeAccountState']>[1],
+    projectAccountIds: Parameters<Store['commitClaudeAccountState']>[2] = {}
   ): void {
-    this.store.commitClaudeAccountState(settingsUpdates, worktreeAccountIds)
+    this.store.commitClaudeAccountState(settingsUpdates, worktreeAccountIds, projectAccountIds)
   }
 
   private async syncRuntimeAuthWithLivePtyGate(

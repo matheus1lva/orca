@@ -8,7 +8,6 @@ import type {
   PtySpawnOptions,
   PtySpawnResult
 } from '../providers/types'
-import type { PtyIncarnationId } from '../../shared/pty-incarnation'
 import { spawnRequiredPtyReattach } from '../providers/required-pty-reattach-routing'
 import type { PtyProcessInspection } from '../providers/pty-process-inspection'
 import { probePtyOwners } from './daemon-pty-liveness-probe'

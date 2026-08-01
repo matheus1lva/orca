@@ -476,7 +476,8 @@ describe('ClaudeAccountService credential capture', () => {
 
   it('refreshes rate limits without recaching a removed active account', async () => {
     setPlatform('linux')
-    tempDir = CLAUDE_SERVICE_TEST_ROOT    rmSync(tempDir, { recursive: true, force: true })
+    tempDir = CLAUDE_SERVICE_TEST_ROOT
+    rmSync(tempDir, { recursive: true, force: true })
     const managedAuthPath = join(tempDir, 'claude-accounts', 'account-1', 'auth')
     mkdirSync(managedAuthPath, { recursive: true })
     writeFileSync(join(managedAuthPath, '.orca-managed-claude-auth'), 'account-1\n', 'utf-8')

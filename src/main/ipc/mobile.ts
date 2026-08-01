@@ -154,7 +154,9 @@ export function registerMobileHandlers(
           available: false as const,
           reason: offer.reason,
           guidance: offer.guidance,
-          ...(offer.relayFailure ? { relayFailure: offer.relayFailure } : {})
+          ...('relayFailure' in offer && offer.relayFailure
+            ? { relayFailure: offer.relayFailure }
+            : {})
         }
       }
 
@@ -173,7 +175,8 @@ export function registerMobileHandlers(
         connectionMode: offer.connectionMode,
         ...(offer.relayDegradeReason
           ? { relayDegradeReason: offer.relayDegradeReason }
-          : {})      }
+          : {})
+      }
     }
   )
 

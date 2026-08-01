@@ -1,20 +1,22 @@
 /* eslint-disable max-lines -- Why: PTY IPC is centralized in one main-process module so spawn env scoping, lifecycle cleanup, process inspection, and renderer IPC stay behind one audited boundary. */
+import { delimiter, join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { statSync } from 'node:fs'
 import {
+  BrowserWindow,
+  IpcMainEvent,
+  IpcMainInvokeEvent,
+  WebContents,
   app,
   ipcMain,
-  powerMonitor,
-  type BrowserWindow,
-  type IpcMainEvent,
-  type IpcMainInvokeEvent,
-  type WebContents,
-  ipcMain,
-  app,
   powerMonitor
 } from 'electron'
-export { getBashShellReadyRcfileContent } from '../providers/local-pty-shell-ready'
 import type { OrcaRuntimeService } from '../runtime/orca-runtime'
 import type { Store } from '../persistence'
-import type { GlobalSettings, TuiAgent } from '../../shared/types'
+import type {
+  GlobalSettings,
+  TuiAgent
+} from '../../shared/types'
 import { toSshExecutionHostId } from '../../shared/execution-host'
 import { normalizeRuntimePathForComparison } from '../../shared/cross-platform-path'
 import { terminalOutputBacklogCapChars } from '../../shared/terminal-scrollback-policy'
@@ -24,123 +26,54 @@ import type {
   PtyRendererDeliveryStateReport
 } from '../../shared/pty-renderer-delivery-health'
 import { extractHiddenStartupRendererQueryData } from '../../shared/terminal-reply-query-extraction'
+import { INITIAL_MODE_2031_REPLY_SCAN_STATE, Mode2031ReplyScanState, scanMode2031ReplyDecision } from '../../shared/terminal-color-scheme-protocol'
 import {
-  INITIAL_MODE_2031_REPLY_SCAN_STATE,
-  scanMode2031ReplyDecision,
-  type Mode2031ReplyScanState
-} from '../../shared/terminal-color-scheme-protocol'
-import {
-  type PtyMainDeliveryDiagnostics,
-  type PtyPerPtyDeliveryDiagnostics,
   EMPTY_PTY_MAIN_DELIVERY_DIAGNOSTICS,
+  PtyMainDeliveryDiagnostics,
+  PtyPerPtyDeliveryDiagnostics,
   createPtyDeliveryBreadcrumbRing,
   redactPtyIdForDiagnostics
 } from '../../shared/pty-delivery-diagnostics'
 import { recordCrashBreadcrumb } from '../crash-reporting/crash-breadcrumb-store'
 import { isTuiAgent } from '../../shared/tui-agent-config'
-import {
-  normalizeAgentProviderSession,
-  type AgentProviderSessionMetadata,
-  type SleepingAgentLaunchConfig,
-} from "../../shared/agent-session-resume";
-import {
-  ClaimedAgentPtyOwnerRegistry,
-  agentSessionOwnerBindingsEqual,
-} from "../../shared/claimed-agent-pty-owner";
-import type { StartupCommandDelivery } from "../../shared/codex-startup-delivery";
-import {
-  getCommandTokenPathBasename,
-  getFirstCommandToken
-} from '../../shared/command-token-scanner'
+import { AgentProviderSessionMetadata, SleepingAgentLaunchConfig, normalizeAgentProviderSession } from '../../shared/agent-session-resume'
+import type { ProjectExecutionRuntimeResolution } from '../../shared/project-execution-runtime'
+import { isWslShellName, resolveLocalWindowsTerminalRuntimeOptions } from '../../shared/local-windows-terminal-runtime'
+import { applyTerminalGitCredentialPromptGuard } from './terminal-git-credential-guard'
+import { openCodeHookService } from '../opencode/hook-service'
+import { mimoCodeHookService } from '../mimo/hook-service'
+import { getCommandTokenPathBasename, getFirstCommandToken } from '../../shared/command-token-scanner'
 import { agentHookServer } from '../agent-hooks/server'
 import { wslHookRelayManager } from '../agent-hooks/wsl-hook-relay-manager'
 import { isAgentStatusHooksEnabled } from '../agent-hooks/managed-agent-hook-controls'
 import { piTitlebarExtensionService } from '../pi/titlebar-extension-service'
 import {
+  PiAgentKind,
   detectExplicitPiAgentKindFromCommand,
-  isPiCompatibleAgentType,
-  type PiAgentKind
+  isPiCompatibleAgentType
 } from '../../shared/pi-agent-kind'
 import { isPwshAvailable } from '../pwsh'
 import { LocalPtyProvider } from '../providers/local-pty-provider'
-import type { IPtyProvider, PtySpawnOptions, PtySpawnResult } from '../providers/types'
-import { isPtyWriteUnavailableError } from '../providers/pty-write-unavailable-error'
-import {
-  inspectPtyProviderProcess,
-  inspectPtyProviderProcessForRenderer
-} from '../providers/pty-process-inspection'
-import {
-  isWslShellName,
-  resolveLocalWindowsTerminalRuntimeOptions,
-} from "../../shared/local-windows-terminal-runtime";
-import {
-  buildConfiguredProxyEnv,
-  type NetworkProxySettings,
-} from "../../shared/network-proxy";
-import {
-  detectPiAgentKindFromCommand,
-  type PiAgentKind,
-} from "../../shared/pi-agent-kind";
-import type { ProjectExecutionRuntimeResolution } from "../../shared/project-execution-runtime";
-import {
-  EMPTY_PTY_MAIN_DELIVERY_DIAGNOSTICS,
-  createPtyDeliveryBreadcrumbRing,
-  redactPtyIdForDiagnostics,
-  type PtyMainDeliveryDiagnostics,
-  type PtyPerPtyDeliveryDiagnostics,
-} from "../../shared/pty-delivery-diagnostics";
-import { isPtyIncarnationId } from "../../shared/pty-incarnation";
-import type { PtyModelRestoreReason } from "../../shared/pty-model-restore-marker";
 import type {
-  PtyDeliveryWriteOff,
-  PtyRendererDeliveryHealthReply,
-  PtyRendererDeliveryStateReport,
-} from "../../shared/pty-renderer-delivery-health";
-import { resolveSetupAgentSequenceLaunchCommand } from "../../shared/setup-agent-sequencing";
-import {
-  isTerminalLeafId,
-  makePaneKey,
-  parseLegacyNumericPaneKey,
-  parsePaneKey,
-} from "../../shared/stable-pane-id";
-import {
-  agentKindSchema,
-  launchSourceSchema,
-  requestKindSchema,
-} from "../../shared/telemetry-events";
-import {
-  isTerminalInputTooLargeWithDeferredMeasurement,
-  iterateTerminalInputChunks,
-} from "../../shared/terminal-input";
-import { extractHiddenStartupRendererQueryData } from "../../shared/terminal-reply-query-extraction";
-import { terminalOutputBacklogCapChars } from "../../shared/terminal-scrollback-policy";
-import { createTerminalSessionStateSaveFailureMessage } from "../../shared/terminal-session-state-save-failure";
-import {
-  resolveTerminalStartupCwdForWorkspace,
-  type TerminalStartupCwdMissingDirFallback,
-} from "../../shared/terminal-startup-cwd";
-import { isValidTerminalTabId } from "../../shared/terminal-tab-id";
-import { validateTerminalViewAttributes } from "../../shared/terminal-view-attributes";
-import { isTuiAgent } from "../../shared/tui-agent-config";
-import type { GlobalSettings, TuiAgent } from "../../shared/types";
-import { parseWorkspaceKey } from "../../shared/workspace-scope";
-import { splitWorktreeIdForFilesystem } from "../../shared/worktree-id";
-import { isWslUncPath } from "../../shared/wsl-paths";
-import { isAgentStatusHooksEnabled } from "../agent-hooks/managed-agent-hook-controls";
-import {
-  clearMigrationUnsupportedPty,
-  clearMigrationUnsupportedPtysForPaneKey,
-} from "../agent-hooks/migration-unsupported-pty-state";
-import { agentHookServer } from "../agent-hooks/server";
-import { wslHookRelayManager } from "../agent-hooks/wsl-hook-relay-manager";
-import {
-  applyTerminalAttributionEnv,
-  resolveAttributionShellFamily,
-} from "../attribution/terminal-attribution";
-import {
-  CLAUDE_AUTH_ENV_VARS,
-  hasClaudeAuthEnvConflict,
-} from "../claude-accounts/environment";
+  IPtyProvider,
+  PtySpawnOptions,
+  PtySpawnResult
+} from '../providers/types'
+import { isPtyWriteUnavailableError } from '../providers/pty-write-unavailable-error'
+import { REQUIRED_PTY_REATTACH_UNAVAILABLE } from '../providers/pty-reattach-contract'
+import { inspectPtyProviderProcess, inspectPtyProviderProcessForRenderer } from '../providers/pty-process-inspection'
+import { PtyProcessListAdmission, visitPtyProcessListingsInBatches } from '../providers/pty-process-list-admission'
+import type { StartupCommandDelivery } from '../../shared/codex-startup-delivery'
+import { SSH_SESSION_EXPIRED_ERROR, isSshPtyIdentityMismatchError, isSshPtyNotFoundError } from '../providers/ssh-pty-errors'
+import { parseAppSshPtyId, toAppSshPtyId, toRelaySshPtyId } from '../providers/ssh-pty-id'
+import { createPtySpawnTiming } from './pty-spawn-timing'
+import { isSafePtySessionId, mintPtySessionId, ptySessionIdForAgentCreateOperation } from '../daemon/pty-session-id'
+import { resolveWslSessionContext } from '../daemon/wsl-session-context'
+import { addNodePtyRecoveryHint } from '../daemon/node-pty-error-hints'
+import { recordDaemonStreamBacklogEvent } from '../daemon/daemon-stream-backlog-probe'
+import type { ClaudeRuntimeAuthPreparation } from '../claude-accounts/runtime-auth-service'
+import { type ClaudeAccountSelectionTarget, getSelectedClaudeAccountIdForTarget } from '../claude-accounts/runtime-selection'
+import { CLAUDE_AUTH_ENV_VARS, hasClaudeAuthEnvConflict } from '../claude-accounts/environment'
 import {
   getLiveInjectedClaudePtyAccountId,
   getLiveSharedClaudePtyAccountId,
@@ -150,85 +83,39 @@ import {
   markClaudePtySpawned,
   markInjectedClaudePtySpawned,
   releaseInjectedClaudeAccountLaunch,
-  releaseSharedClaudeAccountLaunch,
-} from "../claude-accounts/live-pty-gate";
-import { getLiveClaudePtyOwnershipEpoch } from "../claude-accounts/live-pty-ownership-epoch";
-import type { ClaudeRuntimeAuthPreparation } from "../claude-accounts/runtime-auth-service";
-import type { ClaudeAccountSelectionTarget } from "../claude-accounts/runtime-selection";
+  releaseSharedClaudeAccountLaunch
+} from '../claude-accounts/live-pty-gate'
+import { applyTerminalAttributionEnv, resolveAttributionShellFamily } from '../attribution/terminal-attribution'
+import { ensureLinuxTerminalOrcaCliShimDir } from '../cli/linux-terminal-orca-cli-shim'
+import { registerPty, unregisterPty } from '../memory/pty-registry'
+import { advertisedUrlWatcher } from '../ports/advertised-url-watcher'
+import { track } from '../telemetry/client'
+import { classifyError } from '../telemetry/classify-error'
+import { getCohortAtEmit } from '../telemetry/cohort-classifier'
+import { agentKindSchema, launchSourceSchema, requestKindSchema } from '../../shared/telemetry-events'
+import { isTerminalInputTooLargeWithDeferredMeasurement, iterateTerminalInputChunks } from '../../shared/terminal-input'
+import { isRemoteAgentHooksEnabled } from '../../shared/agent-hook-relay'
+import { createTerminalSessionStateSaveFailureMessage } from '../../shared/terminal-session-state-save-failure'
+import { RendererTerminalSerializerReadiness } from './renderer-terminal-serializer-readiness'
+import { readShellStartupEnvVar } from '../pty/shell-startup-env'
 import {
-  collapseClaudeAccountOverrideIfGlobal,
-  resolveClaudeAccountOverrideForWorktree,
-} from "../claude-accounts/worktree-claude-account-override";
-import {
-  getSelectedClaudeAccountIdForTarget,
-} from "../claude-accounts/runtime-selection";
-import { normalizeClaudeAccountLaunchEnv } from "../claude-accounts/service";
-import { getRepoIdFromWorktreeId } from "../../shared/worktree-id";
-import { ensureLinuxTerminalOrcaCliShimDir } from "../cli/linux-terminal-orca-cli-shim";
-import type { CodexAccountSelectionTarget } from "../codex-accounts/runtime-selection";
-import { isCodexSystemDefaultRealHomeEnabled } from "../codex/codex-real-home-flag";
-import { recordCrashBreadcrumb } from "../crash-reporting/crash-breadcrumb-store";
-import { recordDaemonStreamBacklogEvent } from "../daemon/daemon-stream-backlog-probe";
-import { addNodePtyRecoveryHint } from "../daemon/node-pty-error-hints";
-import {
-  isSafePtySessionId,
-  mintPtySessionId,
-  ptySessionIdForAgentCreateOperation,
-} from "../daemon/pty-session-id";
-import { resolveWslSessionContext } from "../daemon/wsl-session-context";
-import { resolveLocalProjectRuntimeForWorktreeId } from "../local-project-runtime-resolution";
-import { registerPty, unregisterPty } from "../memory/pty-registry";
-import { mimoCodeHookService } from "../mimo/hook-service";
-import { openCodeHookService } from "../opencode/hook-service";
-import type { Store } from "../persistence";
-import { piTitlebarExtensionService } from "../pi/titlebar-extension-service";
-import { advertisedUrlWatcher } from "../ports/advertised-url-watcher";
-import {
-  assertFolderWorkspacePathUsable,
-  getFolderWorkspacePathStatus,
-} from "../project-groups/folder-workspace-path-status";
-import { LocalPtyProvider } from "../providers/local-pty-provider";
-import { inspectPtyProviderProcess } from "../providers/pty-process-inspection";
-import {
-  PtyProcessListAdmission,
-  visitPtyProcessListingsInBatches,
-} from "../providers/pty-process-list-admission";
-import { REQUIRED_PTY_REATTACH_UNAVAILABLE } from "../providers/pty-reattach-contract";
-import { getSshFilesystemProvider } from "../providers/ssh-filesystem-dispatch";
-import {
-  SSH_SESSION_EXPIRED_ERROR,
-  isSshPtyIdentityMismatchError,
-  isSshPtyNotFoundError,
-} from "../providers/ssh-pty-errors";
-import {
-  parseAppSshPtyId,
-  toAppSshPtyId,
-  toRelaySshPtyId,
-} from "../providers/ssh-pty-id";
-import type {
-  IPtyProvider,
-  PtySpawnOptions,
-  PtySpawnResult,
-} from "../providers/types";
-import {
-  isHostCodexHomeForWsl,
-  isWslCodexHomeForHost,
-} from "../pty/codex-home-wsl-env";
-import { readShellStartupEnvVar } from "../pty/shell-startup-env";
-import { mergePersistedWindowsPath } from "../pty/windows-environment-path";
-import { addOrcaWslInteropEnv } from "../pty/wsl-orca-env";
-import { isPwshAvailable } from "../pwsh";
-import type { OrcaRuntimeService } from "../runtime/orca-runtime";
-import {
-  clearNativeWindowsConptyPty,
-  isNativeWindowsLocalPtySpawn,
-  markNativeWindowsConptyPty,
-} from "../runtime/terminal-model-query-authority";
-import { setTerminalViewAttributes } from "../runtime/terminal-view-attribute-store";
-import { classifyError } from "../telemetry/classify-error";
-import { track } from "../telemetry/client";
-import { getCohortAtEmit } from "../telemetry/cohort-classifier";
-import { parseWslPath } from "../wsl";
+  isTerminalLeafId,
+  makePaneKey,
+  parseLegacyNumericPaneKey,
+  parsePaneKey
+} from '../../shared/stable-pane-id'
+import { isValidTerminalTabId } from '../../shared/terminal-tab-id'
+import { TerminalStartupCwdMissingDirFallback, resolveTerminalStartupCwdForWorkspace } from '../../shared/terminal-startup-cwd'
+import { isWslUncPath } from '../../shared/wsl-paths'
+import { getRepoIdFromWorktreeId, splitWorktreeIdForFilesystem } from '../../shared/worktree-id'
+import type { AgentSessionOwnerBinding } from '../../shared/agent-session-host-authority'
+import { ClaimedAgentPtyOwnerRegistry, agentSessionOwnerBindingsEqual } from '../../shared/claimed-agent-pty-owner'
+import { clearMigrationUnsupportedPty, clearMigrationUnsupportedPtysForPaneKey } from '../agent-hooks/migration-unsupported-pty-state'
+import { parseWslPath } from '../wsl'
+import { mergePersistedWindowsPath } from '../pty/windows-environment-path'
+import { addOrcaWslInteropEnv, stampWslOrchestrationCompatibilityHost } from '../pty/wsl-orca-env'
+import { PtyProducerFlowController } from './pty-producer-flow-control'
+import { beginTerminalInstall } from './watcher-removal-gate'
 import {
   clearHiddenRendererPtyDeliveryState,
   getHiddenRendererPtyDeliveryDebug,
@@ -241,65 +128,46 @@ import {
   resetRendererScopedHiddenPtyDeliveryState,
   setRendererPtyDeliveryInterest,
   shouldDropHiddenRendererPtyData,
-  unmarkHiddenRendererPty,
-} from "./pty-hidden-delivery-gate";
+  unmarkHiddenRendererPty
+} from './pty-hidden-delivery-gate'
+import { PendingPtyData, PtyPendingDataDrainQueue } from './pty-pending-data-drain-queue'
 import {
+  PendingProjectionAdmissions,
   appendPendingProjectionAdmission,
   compactPendingProjectionAdmissions,
-  propagatePendingProjectionRemainder,
-  type PendingProjectionAdmissions
+  propagatePendingProjectionRemainder
 } from './pty-pending-projection-admissions'
 import { SshPtyOutputIntake } from './ssh-pty-output-intake'
-import {
-  cancelSshPtySourceDelivery,
-  installSshPtyOutputIntake,
-  publishSshPtySourceAck
-} from './ssh-pty-output-intake-registry'
+import { cancelSshPtySourceDelivery, installSshPtyOutputIntake, publishSshPtySourceAck } from './ssh-pty-output-intake-registry'
 import type { LegacySshProjectionSemantics } from './ssh-pty-legacy-projection'
-import {
-  clearNativeWindowsConptyPty,
-  isNativeWindowsLocalPtySpawn,
-  markNativeWindowsConptyPty
-} from '../runtime/terminal-model-query-authority'
+import { clearNativeWindowsConptyPty, isNativeWindowsLocalPtySpawn, markNativeWindowsConptyPty } from '../runtime/terminal-model-query-authority'
 import { setTerminalViewAttributes } from '../runtime/terminal-view-attribute-store'
 import { validateTerminalViewAttributes } from '../../shared/terminal-view-attributes'
 import type { PtyModelRestoreReason } from '../../shared/pty-model-restore-marker'
 import type { CodexAccountSelectionTarget } from '../codex-accounts/runtime-selection'
-import {
-  isCodexHomeAuthReadyForLaunch,
-  waitForManagedCodexAuthReady
-} from '../codex-accounts/managed-codex-auth-readiness'
-import {
-  forgetCodexPaneAccount,
-  recordCodexPaneAccount
-} from '../codex/codex-pane-account-registry'
+import { isCodexHomeAuthReadyForLaunch, waitForManagedCodexAuthReady } from '../codex-accounts/managed-codex-auth-readiness'
+import { forgetCodexPaneAccount, recordCodexPaneAccount } from '../codex/codex-pane-account-registry'
 import { resolveCodexPaneLaunchAccount } from '../codex/codex-pane-launch-account'
 import { getSystemCodexHomePath } from '../codex/codex-home-paths'
 import { isCodexSystemDefaultRealHomeEnabled } from '../codex/codex-real-home-flag'
-import {
-  environmentCodexHomeOverrideContextsEqual,
-  getCustomCodexHomeOverrideForLaunch,
-  shellStartupCodexHomeOverrideContextsEqual
-} from '../codex/codex-real-home-path'
+import { environmentCodexHomeOverrideContextsEqual, getCustomCodexHomeOverrideForLaunch, shellStartupCodexHomeOverrideContextsEqual } from '../codex/codex-real-home-path'
 import type { CodexSessionResumePreparation } from '../codex/codex-session-resume-home'
 import { dropUnverifiedCodexResumeArgv } from '../codex/codex-unverified-resume-launch'
 import { isHostCodexHomeForWsl, isWslCodexHomeForHost } from '../pty/codex-home-wsl-env'
-import { buildConfiguredProxyEnv, type NetworkProxySettings } from '../../shared/network-proxy'
-import {
-  resolveSetupAgentSequenceLaunchCommand,
-  SETUP_AGENT_SEQUENCE_STARTUP_COMMAND_ENV
-} from '../../shared/setup-agent-sequencing'
+import { NetworkProxySettings, buildConfiguredProxyEnv } from '../../shared/network-proxy'
+import { SETUP_AGENT_SEQUENCE_STARTUP_COMMAND_ENV, resolveSetupAgentSequenceLaunchCommand } from '../../shared/setup-agent-sequencing'
 import { dropAgentResumeArgvFromCommand } from '../../shared/agent-resume-argv-drop'
 import { parseWorkspaceKey } from '../../shared/workspace-scope'
 import { getStartupTerminalColorQueryReplyColors } from './terminal-startup-color-query-replies'
-import {
-  assertFolderWorkspacePathUsable,
-  getFolderWorkspacePathStatus
-} from '../project-groups/folder-workspace-path-status'
+import { assertFolderWorkspacePathUsable, getFolderWorkspacePathStatus } from '../project-groups/folder-workspace-path-status'
 import { getSshFilesystemProvider } from '../providers/ssh-filesystem-dispatch'
 import { resolveLocalProjectRuntimeForWorktreeId } from '../local-project-runtime-resolution'
 import { isPtyIncarnationId } from '../../shared/pty-incarnation'
-import type { PtyListedSession } from '../../shared/pty-listed-session'
+export { getBashShellReadyRcfileContent } from '../providers/local-pty-shell-ready'
+import { getLiveClaudePtyOwnershipEpoch } from '../claude-accounts/live-pty-ownership-epoch'
+import { collapseClaudeAccountOverrideIfGlobal, resolveClaudeAccountOverrideForWorktree } from '../claude-accounts/worktree-claude-account-override'
+import { normalizeClaudeAccountLaunchEnv } from '../claude-accounts/service'
+
 
 // ─── Provider Registry ──────────────────────────────────────────────
 // Routes PTY operations by connectionId (null = local provider).
@@ -2020,7 +1888,8 @@ const providerSnapshotRequiredPtys = new Set<string>();
 let rendererDidStartLoadingHandler: (() => void) | null = null;
 
 // Why: Restart daemon must re-bind provider→renderer listeners after replaceDaemonProvider swaps localProvider, else subscribers stay bound to the disposed adapter and new PTY data silently drops.
-let rebindProviderListeners: (() => void) | null = null;
+let rebindProviderListeners: (() => void) | null = null
+let sshOutputIntakeCleanup: (() => void) | null = null
 type PendingClaudeProviderExit = {
   payload: { id: string; code: number };
   ownershipEpoch: number;
@@ -7950,7 +7819,7 @@ export function registerPtyHandlers(
 
   ipcMain.on(
     "pty:getAuthoritativeBufferSnapshotCapabilitiesSync",
-    (event, args: { ids?: unknown }) => {
+    (_event, args: { ids?: unknown }) => {
       const ids = Array.isArray(args?.ids) ? args.ids.slice(0, 512) : [];
       const capabilities: { id: string; authoritative: boolean | null }[] = [];
       const seen = new Set<string>();

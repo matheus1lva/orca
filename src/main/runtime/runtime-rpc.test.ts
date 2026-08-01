@@ -680,6 +680,7 @@ describe('OrcaRuntimeRpcServer', () => {
       // Why: the result reports what the offer actually encodes so the UI can
       // flag the degraded mint instead of labeling it as Relay.
       expect(offer.connectionMode).toBe('local-only')
+      expect(offer.relayDegradeReason).toBe('relay offline')
     } finally {
       await server.stop()
     }

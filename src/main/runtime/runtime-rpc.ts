@@ -82,6 +82,20 @@ function pairingUnavailable(
   return { available: false, reason, guidance }
 }
 
+export function formatMobileRelayDegradeReason(error: unknown): string {
+  if (error instanceof Error) {
+    const message = error.message.trim()
+    if (message.length > 0) {
+      return message
+    }
+    return error.name || 'relay_error'
+  }
+  if (typeof error === 'string' && error.trim().length > 0) {
+    return error.trim()
+  }
+  return 'relay_error_unknown'
+}
+
 const DEVICE_REGISTRY_UNAVAILABLE_GUIDANCE =
   'The pairing registry is unavailable. Verify that the Orca data directory is writable.'
 const E2EE_KEY_UNAVAILABLE_GUIDANCE =
@@ -672,6 +686,8 @@ export class OrcaRuntimeRpcServer {
         webClientUrl: string | null
         /** Mode the offer actually encodes — 'local-only' when an automatic request degraded (Relay couldn't attach). */
         connectionMode: MobilePairingConnectionMode
+        /** Why the automatic mint fell back to local-only; omitted on success or explicit local-only. */
+        relayDegradeReason?: string
       }
   > {
     // Why: the renderer is outside the trust boundary, so only an explicit local-only value may suppress Relay provisioning.
@@ -696,20 +712,45 @@ export class OrcaRuntimeRpcServer {
       return direct
     }
     this.deviceRegistry?.setMobilePairingConnectionMode(direct.deviceId, connectionMode)
-    if (connectionMode === 'local-only' || !this.mobileRelayPairingProvider) {
+    if (connectionMode === 'local-only') {
       return { ...direct, connectionMode: 'local-only' }
+    }
+    if (!this.mobileRelayPairingProvider) {
+      return this.degradeMobilePairingOfferToLocalOnly(
+        direct,
+        'relay_provider_unavailable',
+        'Mobile relay pairing provider is not registered on this runtime.'
+      )
     }
     const device = this.deviceRegistry?.getDevice(direct.deviceId)
     const publicKeyB64 = this.getE2EEPublicKey()
-    if (!device || !publicKeyB64) {
-      return { ...direct, connectionMode: 'local-only' }
+    if (!device) {
+      return this.degradeMobilePairingOfferToLocalOnly(
+        direct,
+        'pairing_device_missing',
+        'Pending mobile pairing device was not found after minting the local offer.'
+      )
+    }
+    if (!publicKeyB64) {
+      return this.degradeMobilePairingOfferToLocalOnly(
+        direct,
+        'e2ee_public_key_unavailable',
+        'Desktop E2EE public key is unavailable; Relay invites require it.'
+      )
     }
     try {
       const relayPairing = await this.mobileRelayPairingProvider.createPairingRelay(device.deviceId)
       if (!this.deviceRegistry?.setRelayBinding(device.deviceId, relayPairing.binding)) {
-        return { ...direct, connectionMode: 'local-only' }
+        return this.degradeMobilePairingOfferToLocalOnly(
+          direct,
+          'relay_binding_persist_failed',
+          'Relay invite minted but local binding could not be persisted for the pairing device.'
+        )
       }
       this.mobileRelayPairingProvider.onDemandStateChanged?.()
+      console.info(
+        `[mobile-relay] pairing offer device=${device.deviceId} mode=automatic relayHostId=${relayPairing.binding.relayHostId}`
+      )
       return {
         ...direct,
         connectionMode: 'automatic',
@@ -722,9 +763,41 @@ export class OrcaRuntimeRpcServer {
           relay: relayPairing.relay
         })
       }
-    } catch {
+    } catch (error) {
       // Why: relay is additive — a transient outage must still yield the valid LAN/Tailscale pairing offer.
-      return { ...direct, connectionMode: 'local-only' }
+      const reason = formatMobileRelayDegradeReason(error)
+      return this.degradeMobilePairingOfferToLocalOnly(
+        direct,
+        reason,
+        `createPairingRelay failed for device=${device.deviceId}: ${reason}`
+      )
+    }
+  }
+
+  private degradeMobilePairingOfferToLocalOnly(
+    direct: {
+      available: true
+      pairingUrl: string
+      endpoint: string
+      deviceId: string
+      webClientUrl: string | null
+    },
+    reason: string,
+    detail: string
+  ): {
+    available: true
+    pairingUrl: string
+    endpoint: string
+    deviceId: string
+    webClientUrl: string | null
+    connectionMode: 'local-only'
+    relayDegradeReason: string
+  } {
+    console.warn(`[mobile-relay] pairing degraded to local-only reason=${reason} detail=${detail}`)
+    return {
+      ...direct,
+      connectionMode: 'local-only',
+      relayDegradeReason: reason
     }
   }
 

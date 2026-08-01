@@ -75,4 +75,23 @@ describe('getSkillFreshnessDisplayStatus', () => {
     // all-clear over drift the update command cannot reach and the user cannot see.
     expect(getSkillFreshnessDisplayStatus(value, SKILL_NAME)).toBe('needs-attention')
   })
+
+  it('ignores plugin-cache scan-limit poison when a current canonical copy exists', () => {
+    // Why: large Codex plugin caches hit the entry budget and invent inaccessible
+    // rows for every official skill — that must not amber healthy installs.
+    const poison: SkillFreshnessInstallation = {
+      ...placement('inaccessible', 2),
+      topology: 'plugin-cache',
+      rootId: 'codex-plugin-cache',
+      sourceKind: 'plugin',
+      sourceLabel: 'Codex plugin cache',
+      unresolvedPath: `/home/.codex/plugins/cache/${SKILL_NAME}`,
+      resolvedPath: null,
+      physicalIdentity: null,
+      errorCategory: 'plugin-cache-scan-incomplete'
+    }
+    expect(
+      getSkillFreshnessDisplayStatus(inventory([placement('current'), poison]), SKILL_NAME)
+    ).toBe('up-to-date')
+  })
 })

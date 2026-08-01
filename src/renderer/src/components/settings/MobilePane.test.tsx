@@ -196,7 +196,8 @@ describe('MobilePane pairing connection mode', () => {
       pairingUrl: 'orca://pair#degraded',
       endpoint: 'ws://host',
       // Relay provisioning failed server-side; the offer encodes local-only.
-      connectionMode: 'local-only'
+      connectionMode: 'local-only',
+      relayDegradeReason: 'relay_control_not_active'
     })
     const user = userEvent.setup()
     render(<MobilePane />)
@@ -206,6 +207,9 @@ describe('MobilePane pairing connection mode', () => {
       expect(screen.getByTestId('relay-degraded-notice')).toHaveTextContent(
         'only works on your LAN or Tailscale'
       )
+    )
+    expect(screen.getByTestId('relay-degrade-reason')).toHaveTextContent(
+      'relay_control_not_active'
     )
 
     // Switching to LAN clears the mismatch along with the QR.

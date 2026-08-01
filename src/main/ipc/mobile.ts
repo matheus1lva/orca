@@ -152,7 +152,10 @@ export function registerMobileHandlers(
         // Why: an automatic request can degrade to a local-only offer when
         // Relay provisioning fails; the UI needs the encoded mode to avoid
         // labeling a LAN-only code as Relay.
-        connectionMode: offer.connectionMode
+        connectionMode: offer.connectionMode,
+        ...(offer.relayDegradeReason
+          ? { relayDegradeReason: offer.relayDegradeReason }
+          : {})
       }
     }
   )

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import nacl from 'tweetnacl'
 import { cancelTrackingResponse } from '../../lib/unread-response-body.test-fixtures'
-import { exchangeRelayAuthorization, requestRelayAssignment } from './relay-http-client'
+import {
+  exchangeRelayAuthorization,
+  parseRetryAfterMs,
+  requestRelayAssignment
+} from './relay-http-client'
 
 describe('relay HTTP client', () => {
   it('exchanges only the ordinary bearer for a host-bound relay token', async () => {
@@ -54,6 +58,41 @@ describe('relay HTTP client', () => {
       authorization: 'Bearer scoped-token'
     })
     expect(fetch.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('carries Retry-After into assignment 429 errors', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(
+      async () =>
+        new Response('Rate exceeded.', {
+          status: 429,
+          headers: { 'retry-after': '45' }
+        })
+    )
+    await expect(
+      requestRelayAssignment({
+        directorUrl: 'https://relay.example',
+        relayToken: 'scoped-token',
+        relayHostId: 'AbCdEf0123_-xyZ9',
+        fetch
+      })
+    ).rejects.toMatchObject({
+      operation: 'assignment',
+      statusCode: 429,
+      retryAfterMs: 45_000
+    })
+  })
+
+  it('parses Retry-After seconds and HTTP dates', () => {
+    const now = Date.parse('2026-01-01T00:00:00.000Z')
+    expect(
+      parseRetryAfterMs(new Response(null, { headers: { 'retry-after': '12' } }), now)
+    ).toBe(12_000)
+    expect(
+      parseRetryAfterMs(
+        new Response(null, { headers: { 'retry-after': 'Thu, 01 Jan 2026 00:00:30 GMT' } }),
+        now
+      )
+    ).toBe(30_000)
   })
 
   it('aborts a blackholed assignment request so recovery can retry', async () => {

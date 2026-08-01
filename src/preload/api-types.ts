@@ -3305,6 +3305,8 @@ export type PreloadApi = {
           deviceId: string
           /** Mode the QR actually encodes; 'local-only' when Relay could not be attached. */
           connectionMode: MobilePairingConnectionMode
+          /** Machine-readable reason when automatic mint degraded to local-only. */
+          relayDegradeReason?: string
         }
     >
     getWindowsFirewallStatus: (args?: { address?: string }) => Promise<

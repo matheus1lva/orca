@@ -4392,6 +4392,7 @@ const api = {
           endpoint: string
           deviceId: string
           connectionMode: MobilePairingConnectionMode
+          relayDegradeReason?: string
         }
     > => ipcRenderer.invoke('mobile:getPairingQR', args),
 

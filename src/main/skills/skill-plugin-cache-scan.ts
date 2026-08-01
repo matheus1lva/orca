@@ -3,7 +3,9 @@ import { opendir, realpath, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
 const MAXIMUM_PLUGIN_SCAN_DEPTH = 9
-const MAXIMUM_PLUGIN_SCAN_ENTRIES = 4_096
+// Why: Codex plugin caches routinely exceed 4k entries (openai-bundled alone);
+// a low ceiling marks the whole tree incomplete and poisons every official skill.
+const MAXIMUM_PLUGIN_SCAN_ENTRIES = 32_768
 export const MAXIMUM_PLUGIN_SKILL_CANDIDATES = 64
 const MAXIMUM_PLUGIN_INCOMPLETE_PATHS = 16
 

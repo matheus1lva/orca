@@ -35,6 +35,7 @@ export function MobilePane(): React.JSX.Element {
   // Mode the displayed QR actually encodes; can be 'local-only' under an
   // Anywhere selection when Relay provisioning degraded server-side.
   const [qrEncodedMode, setQrEncodedMode] = useState<MobilePairingConnectionMode | null>(null)
+  const [relayDegradeReason, setRelayDegradeReason] = useState<string | null>(null)
   const [endpoint, setEndpoint] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [qrEnlarged, setQrEnlarged] = useState(false)
@@ -86,6 +87,7 @@ export function MobilePane(): React.JSX.Element {
     setQrDataUrl(null)
     setPairingUrl(null)
     setQrEncodedMode(null)
+    setRelayDegradeReason(null)
     setEndpoint(null)
     // Why: a superseded in-flight generate no longer clears loading in its
     // finally (the epoch bump skips it), so drop the spinner here or Generate
@@ -193,6 +195,11 @@ export function MobilePane(): React.JSX.Element {
             setQrDataUrl(result.qrDataUrl)
             setPairingUrl(result.pairingUrl)
             setQrEncodedMode(result.connectionMode)
+            setRelayDegradeReason(
+              result.connectionMode === 'local-only' && result.relayDegradeReason
+                ? result.relayDegradeReason
+                : null
+            )
             setEndpoint(result.endpoint)
             setDeviceCountAtQr(getPairedMobileDevicesSnapshot().length)
             clearCodeCopiedResetTimer()
@@ -348,12 +355,28 @@ export function MobilePane(): React.JSX.Element {
           data-testid="relay-degraded-notice"
         >
           <CircleAlert className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <p className="text-xs text-muted-foreground">
-            {translate(
-              'auto.components.settings.MobilePane.relayDegradedNotice',
-              'Relay couldn’t be reached — this code only works on your LAN or Tailscale. Regenerate to try again.'
-            )}
-          </p>
+          <div className="min-w-0 space-y-1">
+            <p className="text-xs text-muted-foreground">
+              {relayDegradeReason?.includes('429')
+                ? translate(
+                    'auto.components.settings.MobilePane.relayRateLimitedNotice',
+                    'Relay is rate-limiting this machine. Wait ~1 minute, then regenerate once — spamming makes it worse. LAN/Tailscale still works now.'
+                  )
+                : translate(
+                    'auto.components.settings.MobilePane.relayDegradedNotice',
+                    'Relay couldn’t be reached — this code only works on your LAN or Tailscale. Regenerate to try again.'
+                  )}
+            </p>
+            {relayDegradeReason ? (
+              <p
+                className="break-all font-mono text-[11px] text-muted-foreground/90"
+                data-testid="relay-degrade-reason"
+              >
+                {translate('auto.components.settings.MobilePane.relayDegradeReasonLabel', 'Reason:')}{' '}
+                {relayDegradeReason}
+              </p>
+            ) : null}
+          </div>
         </div>
       ) : null}
 

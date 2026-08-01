@@ -93,6 +93,95 @@ describe('RelayAuthCoordinator transient recovery', () => {
     expect(openBroker).toHaveBeenCalledTimes(12)
   })
 
+  it('waitForActiveBroker waits through a transient open failure when maxRetryWaitMs is set', async () => {
+    vi.useFakeTimers()
+    const broker = { closeNow: vi.fn() }
+    const openBroker = vi
+      .fn()
+      .mockRejectedValueOnce(new RelayHttpError('assignment', 500))
+      .mockResolvedValueOnce(broker)
+    const coordinator = new RelayAuthCoordinator({
+      readContext: async () => context,
+      openBroker,
+      onStatus: vi.fn(),
+      random: () => 0.5
+    })
+
+    coordinator.reconcile()
+    const waiting = coordinator.waitForActiveBroker({ maxRetryWaitMs: 5_000 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(openBroker).toHaveBeenCalledOnce()
+    // First open failed; wait is still pending for the scheduled retry.
+    let settled = false
+    void waiting.then(() => {
+      settled = true
+    })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(501)
+    await expect(waiting).resolves.toBe(broker)
+    expect(openBroker).toHaveBeenCalledTimes(2)
+    expect(coordinator.getLastFailureReason()).toBeNull()
+  })
+
+  it('holds a rate-limit cooldown so regenerate does not re-hammer assign', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+    const broker = { closeNow: vi.fn() }
+    const openBroker = vi
+      .fn()
+      .mockRejectedValueOnce(new RelayHttpError('assignment', 429, 60_000))
+      .mockResolvedValueOnce(broker)
+    const coordinator = new RelayAuthCoordinator({
+      readContext: async () => context,
+      openBroker,
+      onStatus: vi.fn(),
+      random: () => 0
+    })
+
+    coordinator.reconcile()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(openBroker).toHaveBeenCalledOnce()
+    expect(coordinator.getLastFailureReason()).toBe('relay_assignment_failed_429')
+
+    // Immediate re-reconcile (e.g. QR regenerate) must not call assign again.
+    coordinator.reconcile()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(openBroker).toHaveBeenCalledOnce()
+
+    await vi.advanceTimersByTimeAsync(59_999)
+    expect(openBroker).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(openBroker).toHaveBeenCalledTimes(2)
+    expect(coordinator.getActiveBroker()).toBe(broker)
+  })
+
+  it('surfaces permanent open failures via getLastFailureReason', async () => {
+    vi.useFakeTimers()
+    const openBroker = vi.fn().mockRejectedValue(new RelayHttpError('token-exchange', 403))
+    const coordinator = new RelayAuthCoordinator({
+      readContext: async () => context,
+      openBroker,
+      onStatus: vi.fn()
+    })
+    coordinator.reconcile()
+    await vi.advanceTimersByTimeAsync(0)
+    await expect(coordinator.waitForActiveBroker()).resolves.toBeNull()
+    expect(coordinator.getLastFailureReason()).toBe('relay_token-exchange_failed_403')
+  })
+
+  it('surfaces missing relay entitlement', async () => {
+    const coordinator = new RelayAuthCoordinator({
+      readContext: async () => ({ ...context, relayEntitled: false }),
+      openBroker: vi.fn(),
+      onStatus: vi.fn()
+    })
+    coordinator.reconcile()
+    await expect(coordinator.waitForActiveBroker()).resolves.toBeNull()
+    expect(coordinator.getLastFailureReason()).toBe('relay_not_entitled')
+  })
+
   it('does not retry a permanent authorization response', async () => {
     vi.useFakeTimers()
     const openBroker = vi.fn().mockRejectedValue(new RelayHttpError('token-exchange', 403))

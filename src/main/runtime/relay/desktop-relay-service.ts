@@ -103,19 +103,30 @@ export class DesktopRelayService {
   async createPairingRelay(
     relayDeviceId: string
   ): Promise<{ relay: PairingRelay; binding: RelayDeviceBinding }> {
-    return await this.withTransientDemand(`pairing:${relayDeviceId}`, async () => {
-      const broker = await this.requireActiveBroker()
-      const relay = await broker.createPairingRelay(relayDeviceId)
-      return {
-        relay,
-        binding: {
-          relayHostId: broker.hostId,
-          relayDeviceId,
-          ownerIdentityKey: broker.ownerIdentityKey,
-          inviteExpiresAt: relay.inviteExpiresAt
+    try {
+      return await this.withTransientDemand(`pairing:${relayDeviceId}`, async () => {
+        const broker = await this.requireActiveBroker()
+        const relay = await broker.createPairingRelay(relayDeviceId)
+        console.info(
+          `[mobile-relay] createPairingRelay ok device=${relayDeviceId} hostId=${broker.hostId}`
+        )
+        return {
+          relay,
+          binding: {
+            relayHostId: broker.hostId,
+            relayDeviceId,
+            ownerIdentityKey: broker.ownerIdentityKey,
+            inviteExpiresAt: relay.inviteExpiresAt
+          }
         }
-      }
-    })
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(
+        `[mobile-relay] createPairingRelay failed device=${relayDeviceId} reason=${message}`
+      )
+      throw error
+    }
   }
 
   onDeviceRevokeQueued(item: RelayRevokeOutboxItem): void {
@@ -271,14 +282,18 @@ export class DesktopRelayService {
 
   private async activeBrokerForDemand(): Promise<RelaySessionBroker | null> {
     const broker =
-      this.coordinator.getActiveBroker() ?? (await this.coordinator.waitForActiveBroker())
+      this.coordinator.getActiveBroker() ??
+      // Why: first open can fail transiently (director 5xx/429); wait for the
+      // coordinator's own retry window instead of degrading pairing to LAN.
+      // Why: director 429 cooldown is ~60s; pairing must outwait one window.
+      (await this.coordinator.waitForActiveBroker({ maxRetryWaitMs: 90_000 }))
     return broker instanceof RelaySessionBroker ? broker : null
   }
 
   private async requireActiveBroker(): Promise<RelaySessionBroker> {
     const broker = await this.activeBrokerForDemand()
     if (!broker) {
-      throw new Error('relay_control_not_active')
+      throw new Error(this.coordinator.getLastFailureReason() ?? 'relay_control_not_active')
     }
     return broker
   }

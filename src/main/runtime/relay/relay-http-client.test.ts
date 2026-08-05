@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import nacl from 'tweetnacl'
 import { cancelTrackingResponse } from '../../lib/unread-response-body.test-fixtures'
-import { exchangeRelayAuthorization, requestRelayAssignment } from './relay-http-client'
+import {
+  exchangeRelayAuthorization,
+  parseRetryAfterMs,
+  requestRelayAssignment
+} from './relay-http-client'
 
 describe('relay HTTP client', () => {
   it('exchanges only the ordinary bearer for a host-bound relay token', async () => {

@@ -548,6 +548,7 @@ export class LocalPtyProvider implements IPtyProvider {
     }
     if (args.requireReattach) {
       throw new Error(requiredPtyReattachUnavailableMessage(args.sessionId ?? ''))
+    }
     if (args.attachOnly) {
       throw new Error(`Session not found: ${args.sessionId ?? ''}`)
     }

@@ -1,11 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import nacl from 'tweetnacl'
 import { cancelTrackingResponse } from '../../lib/unread-response-body.test-fixtures'
-import {
-  exchangeRelayAuthorization,
-  parseRetryAfterMs,
-  requestRelayAssignment
-} from './relay-http-client'
+import { exchangeRelayAuthorization, requestRelayAssignment } from './relay-http-client'
 
 describe('relay HTTP client', () => {
   it('exchanges only the ordinary bearer for a host-bound relay token', async () => {
@@ -59,6 +55,60 @@ describe('relay HTTP client', () => {
     })
     expect(fetch.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal)
   })
+
+  it('declares reconnection in the assignment body when hinted', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () =>
+      Response.json({
+        v: 1,
+        cellUrl: 'https://relay-c1.example',
+        assignmentEpoch: 4,
+        lease: 'lease-jwt'
+      })
+    )
+    await expect(
+      requestRelayAssignment({
+        directorUrl: 'https://relay.example',
+        relayToken: 'scoped-token',
+        relayHostId: 'AbCdEf0123_-xyZ9',
+        reconnect: true,
+        fetch
+      })
+    ).resolves.toMatchObject({ assignmentEpoch: 4 })
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({
+      v: 1,
+      relayHostId: 'AbCdEf0123_-xyZ9',
+      reconnect: true
+    })
+  })
+
+  it('retries once unhinted when a rolled-back director rejects the hint', async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(Response.json({ error: 'invalid_request' }, { status: 400 }))
+      .mockResolvedValueOnce(
+        Response.json({
+          v: 1,
+          cellUrl: 'https://relay-c1.example',
+          assignmentEpoch: 4,
+          lease: 'lease-jwt'
+        })
+      )
+    await expect(
+      requestRelayAssignment({
+        directorUrl: 'https://relay.example',
+        relayToken: 'scoped-token',
+        relayHostId: 'AbCdEf0123_-xyZ9',
+        reconnect: true,
+        fetch
+      })
+    ).resolves.toMatchObject({ assignmentEpoch: 4 })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(String(fetch.mock.calls[1]?.[1]?.body))).toEqual({
+      v: 1,
+      relayHostId: 'AbCdEf0123_-xyZ9'
+    })
+  })
+
 
   it('carries Retry-After into assignment 429 errors', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(

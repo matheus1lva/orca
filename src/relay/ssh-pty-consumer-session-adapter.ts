@@ -1,6 +1,7 @@
 import {
   PTY_CONSUMER_SESSION_PROTOCOL_VERSION,
   PtyConsumerSession,
+  type PtyConsumerSessionAdmission,
   type PtyConsumerSessionGrant,
   type PtyConsumerSessionHello
 } from '../shared/pty-consumer-session'
@@ -74,7 +75,7 @@ export class SshPtyConsumerSessionAdapter {
   private readonly pausedDeliveryByPty = new Map<string, PtySourceDeliveryIdentity>()
 
   constructor(
-    dispatcher: RelayDispatcher,
+    private readonly dispatcher: RelayDispatcher,
     serverBuildId: string,
     private readonly setDeliveryPaused?: (id: string, paused: boolean) => void,
     onSourceCreditAvailable?: (id: string) => void
@@ -94,12 +95,12 @@ export class SshPtyConsumerSessionAdapter {
     dispatcher.onRequest(SSH_PTY_OPEN_CLIENT_METHOD, (params, context) =>
       this.openClient(params, context)
     )
-    dispatcher.onClientDetached((clientId) => {
+    dispatcher.onClientDetached((clientId, cause) => {
       const grant = this.session.activeGrant(String(clientId))
       if (grant) {
         this.clearPausedForGrant(grant)
       }
-      this.session.close(String(clientId))
+      this.session.close(String(clientId), cause)
       if (grant) {
         this.sourceCredit.retainOrCloseOnDetach(grant)
       }
@@ -268,13 +269,28 @@ export class SshPtyConsumerSessionAdapter {
       throw new Error('SSH PTY consumer response publication fence is unavailable')
     }
     context.onResponseSettled((result) => {
-      if (result.ok) {
-        admission.commitPublication()
-      } else {
+      if (!result.ok) {
         admission.rollbackPublication()
+        return
       }
+      admission.commitPublication()
+      this.closeDisplacedOwner(admission.displacedOwner)
     })
     return admission.grant
+  }
+
+  // Why: only after the replacement grant is published — until then the admission can still roll back
+  // onto the incumbent. Its deliveries are retained for the new owner to rotate, exactly as on detach.
+  private closeDisplacedOwner(displaced: PtyConsumerSessionAdmission['displacedOwner']): void {
+    if (!displaced) {
+      return
+    }
+    this.clearPausedForGrant(displaced.grant)
+    this.sourceCredit.retainOrCloseOnDetach(displaced.grant)
+    const clientId = Number(displaced.connectionId)
+    if (Number.isSafeInteger(clientId)) {
+      this.dispatcher.releaseDisplacedClient(clientId)
+    }
   }
 
   private clearPausedIdentity(identity: PtySourceDeliveryIdentity): void {

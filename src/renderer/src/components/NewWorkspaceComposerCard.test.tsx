@@ -154,7 +154,7 @@ const devboxNeedsSetupHostOption: ProjectHostSetupOption = {
   projectId: 'project-group:platform',
   hostId: 'ssh:devbox',
   label: 'Devbox',
-  detail: 'Project not set up on this host',
+  detail: 'Project location not set',
   isAvailable: true,
   attention: false
 }
@@ -590,7 +590,7 @@ describe('NewWorkspaceComposerCard folder task source mode', () => {
     openRunTargetPicker(current.container)
 
     const devboxItem = findRunTargetItem('Devbox')
-    expect(devboxItem?.textContent).toContain('Project not set up on this host')
+    expect(devboxItem?.textContent).toContain('Project location not set')
     // Not-connected rows stay highlightable (never `disabled`) so they hover like
     // the other rows; they're quieted visually instead.
     expect(devboxItem?.hasAttribute('data-disabled')).toBe(false)

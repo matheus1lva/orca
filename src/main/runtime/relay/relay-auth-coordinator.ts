@@ -19,6 +19,7 @@ export type RelayAuthContext = {
 
 export type CoordinatedRelayBroker = {
   closeNow(): void
+  isLive?(): boolean
 }
 
 type RelayAuthCoordinatorOptions = {
@@ -100,6 +101,22 @@ export class RelayAuthCoordinator {
 
   getLastFailureReason(): string | null {
     return this.lastFailureReason
+  }
+
+  // Why: some broker deaths end with no retry timer — an auth refresh that
+  // fails past token expiry (laptop sleep), or a transient context read that
+  // returned null at open. Periodic/power-resume callers use this as a
+  // dead-man's switch; it never disturbs a live broker, a scheduled retry,
+  // or an open already in flight.
+  ensureLive(): void {
+    if (this.stopped || this.retryTimer || this.pendingOwnerships.size > 0) {
+      return
+    }
+    const ownership = this.ownership
+    if (ownership?.valid && (ownership.broker?.isLive?.() ?? true)) {
+      return
+    }
+    this.beginReconcile(false)
   }
 
   /**
@@ -186,7 +203,13 @@ export class RelayAuthCoordinator {
         return
       }
       this.cancelLinger()
-      if (this.ownership?.valid && this.ownership.identityKey === nextIdentityKey) {
+      if (
+        this.ownership?.valid &&
+        this.ownership.identityKey === nextIdentityKey &&
+        // Why: registered must be provable; a broker whose control died without
+        // recovering falls through and is replaced instead of republished.
+        (this.ownership.broker?.isLive?.() ?? true)
+      ) {
         this.retryAttempt = 0
         this.lastFailureReason = null
         this.options.onStatus('registered')
@@ -239,6 +262,8 @@ export class RelayAuthCoordinator {
       if (this.isEpochCurrent(epoch)) {
         const message = error instanceof Error ? error.message : String(error)
         this.lastFailureReason = message
+        // Why: silent broker-open failures made a dead relay look like standby
+        // during incident diagnosis; the message carries operation + status.
         console.warn(`[relay] control open failed reason=${message}`)
         this.options.onStatus('offline')
         if (error instanceof RelayHttpError && error.statusCode === 429) {

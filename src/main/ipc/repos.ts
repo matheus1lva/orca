@@ -6,6 +6,7 @@ import { homedir } from 'node:os'
 import { z } from 'zod'
 import type { Store } from '../persistence'
 import { assertValidClaudeAccountPin } from '../claude-accounts/worktree-account-pin'
+import type { OrcaRuntimeService } from '../runtime/orca-runtime'
 import type {
   BaseRefSearchResult,
   Project,
@@ -749,6 +750,15 @@ type ActiveRemoteCloneMetadata = {
   connectionId: string
   clonePath: string
   controller: AbortController
+}
+
+type RepoRemoteClientNotifier = Pick<OrcaRuntimeService, 'notifyReposChangedForRemoteClients'>
+
+// Why: notifyReposChanged is module-level and cannot close over a handler argument (#11994).
+let repoRemoteClientNotifier: RepoRemoteClientNotifier | null = null
+
+export function setRepoRemoteClientNotifier(notifier: RepoRemoteClientNotifier): void {
+  repoRemoteClientNotifier = notifier
 }
 
 // Why: module-scoped so the abort handle survives macOS window re-creation, when registerRepoHandlers re-runs.
@@ -2705,6 +2715,14 @@ function getRepoForExecutionHost(
 function notifyReposChanged(mainWindow: BrowserWindow): void {
   if (!mainWindow.isDestroyed()) {
     mainWindow.webContents.send('repos:changed')
+  }
+  // Why: paired clients only refetch a remote catalog on this event; without it a
+  // host-side delete or rename stays invisible to them indefinitely (#11994).
+  try {
+    repoRemoteClientNotifier?.notifyReposChangedForRemoteClients()
+  } catch (err) {
+    // Why: a broadcast failure must never fail the mutation the user actually asked for.
+    console.error('[repos] failed to notify remote clients of repo change', err)
   }
   scheduleCurrentWorktreeBaseDirectoryWatcherSync()
 }

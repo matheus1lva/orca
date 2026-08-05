@@ -4133,6 +4133,33 @@ describe('ClaudeRuntimeAuthService', () => {
     }
   })
 
+  it('prepares rate-limit fetch from managed creds while a worktree-pinned Claude is live', async () => {
+    const managedAuthPath = createManagedClaudeAuth(
+      testState.userDataDir,
+      'account-1',
+      createClaudeCredentialsJson('one@example.com', 'token-one')
+    )
+    const settings = createSettings({
+      claudeManagedAccounts: [createClaudeAccount('account-1', managedAuthPath)],
+      activeClaudeManagedAccountId: 'account-1'
+    })
+    const store = createStore(settings)
+    const { markClaudePtyExited, markInjectedClaudePtySpawned } = await import('./live-pty-gate')
+    markInjectedClaudePtySpawned('injected-pty', 'account-1')
+    try {
+      const { ClaudeRuntimeAuthService } = await import('./runtime-auth-service')
+      const service = new ClaudeRuntimeAuthService(store as never)
+
+      const preparation = await service.prepareForRateLimitFetch()
+      expect(preparation.configDir).toBe(managedAuthPath)
+      expect(preparation.managedRefreshDeferredByLivePty).toBe(true)
+      expect(preparation.provenance).toContain('injected')
+      expect(refreshClaudeOauthCredentials).not.toHaveBeenCalled()
+    } finally {
+      markClaudePtyExited('injected-pty')
+    }
+  })
+
   it('switches global accounts without reading back over a live pinned predecessor', async () => {
     const accountAPath = createManagedClaudeAuth(
       testState.userDataDir,

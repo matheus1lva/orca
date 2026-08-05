@@ -313,6 +313,20 @@ describe('Claude live PTY gate', () => {
     }
   })
 
+  it('allows usage-style mutations while a worktree-pinned Claude is live', () => {
+    markInjectedClaudePtySpawned('injected-pty', 'account-a')
+    try {
+      expect(() => beginManagedClaudeAccountMutation('account-a')).toThrow('assigned worktree')
+      beginManagedClaudeAccountMutation('account-a', {
+        allowLiveSharedPtys: true,
+        allowLiveInjectedPtys: true
+      })
+      endManagedClaudeAccountMutation('account-a')
+    } finally {
+      markClaudePtyExited('injected-pty')
+    }
+  })
+
   it('protects a system-default shared launch even without a managed account id', () => {
     const reservationId = reserveSharedClaudeAccountLaunch(null)
     try {

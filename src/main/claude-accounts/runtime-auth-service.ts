@@ -208,6 +208,22 @@ export class ClaudeRuntimeAuthService {
     target?: ClaudeAccountSelectionTarget
   ): Promise<ClaudeRuntimeAuthPreparation> {
     const effectiveTarget = target ?? this.getDefaultAccountSelectionTarget()
+    const settings = this.store.getSettings()
+    const normalizedTarget = normalizeClaudeAccountSelectionTarget(
+      this.resolveWslDefaultTarget(effectiveTarget)
+    )
+    const activeAccountId = getSelectedClaudeAccountIdForTarget(settings, normalizedTarget)
+    const activeAccount = this.getActiveAccount(settings.claudeManagedAccounts, activeAccountId)
+    // Why: a worktree-pinned CLI owns this account's single-use refresh chain. Materializing
+    // shared auth would fork it mid-session. Usage only needs a read of managed creds —
+    // point at the managed config dir and defer any Orca-side token rotation.
+    if (activeAccount && hasLiveInjectedClaudePtysForAccount(activeAccount.id)) {
+      this.managedRefreshDeferredByLivePtyAccountId = activeAccount.id
+      return {
+        ...this.getInjectedPreparation(activeAccount),
+        managedRefreshDeferredByLivePty: true
+      }
+    }
     await this.syncForCurrentSelection(effectiveTarget)
     return this.getPreparation(effectiveTarget)
   }

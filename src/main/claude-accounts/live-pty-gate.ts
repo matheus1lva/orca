@@ -282,12 +282,37 @@ export function reserveSharedClaudeAccountLaunch(accountId: string | null): stri
   return reservationId
 }
 
+export type ManagedClaudeAccountMutationOptions = {
+  /** Allow live global/shared Claude PTYs for this account (e.g. outgoing read-back on switch). */
+  allowLiveSharedPtys?: boolean
+  /**
+   * Allow live worktree-pinned Claude PTYs. Usage/limits refresh is read-mostly and must not
+   * require closing assigned terminals; real auth mutations keep this false.
+   */
+  allowLiveInjectedPtys?: boolean
+}
+
+function normalizeManagedClaudeAccountMutationOptions(
+  options: boolean | ManagedClaudeAccountMutationOptions = false
+): Required<ManagedClaudeAccountMutationOptions> {
+  // Why: preserve the historical third-arg boolean as allowLiveSharedPtys.
+  if (typeof options === 'boolean') {
+    return { allowLiveSharedPtys: options, allowLiveInjectedPtys: false }
+  }
+  return {
+    allowLiveSharedPtys: options.allowLiveSharedPtys === true,
+    allowLiveInjectedPtys: options.allowLiveInjectedPtys === true
+  }
+}
+
 export function beginManagedClaudeAccountMutation(
   accountId: string,
-  allowLiveSharedPtys = false
+  options: boolean | ManagedClaudeAccountMutationOptions = false
 ): void {
+  const { allowLiveSharedPtys, allowLiveInjectedPtys } =
+    normalizeManagedClaudeAccountMutationOptions(options)
   if (
-    hasLiveInjectedClaudePtysForAccount(accountId) ||
+    (!allowLiveInjectedPtys && hasLiveInjectedClaudePtysForAccount(accountId)) ||
     (!allowLiveSharedPtys && hasLiveSharedClaudePtysForAccount(accountId)) ||
     [...sharedClaudeLaunchReservations.values()].some(
       (reservedAccountId) => reservedAccountId === null || reservedAccountId === accountId
@@ -310,13 +335,13 @@ export function endManagedClaudeAccountMutation(accountId: string): void {
 export async function runManagedClaudeAccountMutation<T>(
   accountId: string,
   operation: () => Promise<T>,
-  allowLiveSharedPtys = false
+  options: boolean | ManagedClaudeAccountMutationOptions = false
 ): Promise<T> {
   const inherited = managedClaudeAccountMutationContext.getStore()
   if (inherited?.has(accountId)) {
     return operation()
   }
-  beginManagedClaudeAccountMutation(accountId, allowLiveSharedPtys)
+  beginManagedClaudeAccountMutation(accountId, options)
   try {
     return await managedClaudeAccountMutationContext.run(
       new Set([...(inherited ?? []), accountId]),

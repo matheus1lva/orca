@@ -23,6 +23,7 @@ import {
   writeActiveClaudeKeychainCredentials,
   writeManagedClaudeKeychainCredentials
 } from '../claude-accounts/keychain'
+import { hasLiveInjectedClaudePtysForAccount } from '../claude-accounts/live-pty-gate'
 import {
   readClaudeManagedAuthFile,
   resolveOwnedClaudeManagedAuthPath,
@@ -1200,8 +1201,12 @@ export async function fetchManagedAccountUsage(
   }
 
   // Why: refresh+persist an expiring token now so inactive accounts' single-use refresh tokens stay fresh for a later switch-in (persist failure is non-fatal).
+  // Skip while a worktree-pinned CLI owns the chain — rotating here would invalidate its session.
   let token = parseOAuthCredentialsJson(credentialsJson, 'credentials-file').token
-  if (isOauthTokenExpiring(credentialsJson)) {
+  if (
+    isOauthTokenExpiring(credentialsJson) &&
+    !hasLiveInjectedClaudePtysForAccount(account.id)
+  ) {
     const refreshed = await refreshClaudeOauthCredentials(credentialsJson)
     if (options.signal?.aborted) {
       return abortedClaudeRateLimitResult()

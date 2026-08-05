@@ -1530,7 +1530,13 @@ export class RateLimitService {
     if (!accountId) {
       return operation()
     }
-    return runManagedClaudeAccountMutation(accountId, operation)
+    // Why: usage/limits is read-mostly. Live shared or worktree-pinned Claude owns the
+    // refresh chain, but viewing quotas must not force closing those terminals. Real
+    // account mutations keep the stricter gate.
+    return runManagedClaudeAccountMutation(accountId, operation, {
+      allowLiveSharedPtys: true,
+      allowLiveInjectedPtys: true
+    })
   }
 
   private fetchClaudeWithOwnership(

@@ -23,6 +23,7 @@ import { registerWorkspaceCleanupHandlers } from '../ipc/workspace-cleanup'
 import {
   getLocalPtyProvider,
   registerPtyHandlers,
+  type CodexHomePtySpawnedLifecycleArgs,
   type GetSelectedCodexHomePath,
   type PrepareCodexSessionResume
 } from '../ipc/pty'
@@ -98,6 +99,8 @@ export function attachMainWindowServices(
     onBeforeRendererReload?: (args: { webContentsId: number; ignoreCache: boolean }) => void
     // Why: lets the PTY orphan sweep skip the one crash-recovery reload (#5787).
     isRecoveryReloadInFlight?: (webContentsId: number) => boolean
+    onCodexHomePtySpawned?: (args: CodexHomePtySpawnedLifecycleArgs) => void
+    onPtyExit?: (id: string, exitSequence: number) => void
     onBeforeUpdateQuit?: () => void | Promise<void>
     updateInstallMode?: UpdateInstallMode
     onWorktreeLifecycle?: (event: RuntimeWorktreeLifecycleEvent) => void
@@ -129,7 +132,9 @@ export function attachMainWindowServices(
       prepareCodexSessionResume: options?.prepareCodexSessionResume,
       awaitLocalPtyStartup: options?.awaitLocalPtyStartup,
       awaitLocalPtyProviderStartup: options?.awaitLocalPtyProviderStartup,
-      isRecoveryReloadInFlight: options?.isRecoveryReloadInFlight
+      isRecoveryReloadInFlight: options?.isRecoveryReloadInFlight,
+      onCodexHomePtySpawned: options?.onCodexHomePtySpawned,
+      onPtyExit: options?.onPtyExit
     },
     isInjectedClaudeAccountTarget
   )

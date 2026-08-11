@@ -14,7 +14,9 @@ import { isPathInsideOrEqual } from '../../../../shared/cross-platform-path'
 import { resolveMarkdownLinkTarget } from '@/components/editor/markdown-internal-links'
 import {
   buildCheckRunDetailsTabId,
+  createCheckRunDetailsRequestId,
   getCheckRunDetailsTabLabel,
+  isSameGitHubRepository,
   isSameGitLabProjectRef,
   type CheckRunDetailsTabPatch,
   type OpenCheckRunDetailsState
@@ -45,6 +47,7 @@ import type {
   WorkspaceSessionState,
   WorkspaceVisibleTabType
 } from '../../../../shared/types'
+import type { GitBranchLineTotal } from '../../../../shared/git-status-types'
 import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
 import { clampMarkdownTocPanelWidth } from '../../../../shared/markdown-toc-panel-width'
 import {
@@ -629,6 +632,8 @@ export type EditorSlice = {
   gitStatusHeadByWorktree: Record<string, string>
   // Why: set when status hit the entry limit; SCM shows "too many changes" and pauses polling. `{ limit }` when huge, else absent.
   gitStatusHugeByWorktree: Record<string, { limit: number }>
+  // Why: absent means "not known exact" (stale fork point, old server, capped listing); never fall back to a previous total.
+  gitBranchLineTotalByWorktree: Record<string, GitBranchLineTotal | null>
   gitIgnoredPathsByWorktree: Record<string, string[]>
   gitConflictOperationByWorktree: Record<string, GitConflictOperation>
   trackedConflictPathsByWorktree: Record<string, Record<string, GitConflictKind>>
@@ -3799,14 +3804,21 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
     const checkRunDetails: OpenCheckRunDetailsState = {
       contextKey,
       check,
+      requestId: state.requestId,
       details: state.details,
       loading: state.loading,
       error: state.error,
+      githubRepository: state.githubRepository ?? null,
       gitlabProjectRef: state.gitlabProjectRef ?? null
     }
     set((s) => {
       const existing = s.openFiles.find((f) => f.id === id)
       if (existing) {
+        const existingDetails = existing.checkRunDetails
+        const incomingIsStale =
+          existingDetails?.contextKey === contextKey &&
+          existingDetails.requestId !== undefined &&
+          (state.requestId === undefined || state.requestId < existingDetails.requestId)
         return {
           openFiles: s.openFiles.map((f) =>
             f.id === id
@@ -3815,7 +3827,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
                   mode: 'check-details' as const,
                   relativePath: label,
                   language: 'plaintext',
-                  checkRunDetails
+                  checkRunDetails: incomingIsStale ? existingDetails : checkRunDetails
                 }
               : f
           ),
@@ -3857,24 +3869,39 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         return s
       }
       const current = existing.checkRunDetails
+      if (current.contextKey !== contextKey) {
+        return s
+      }
+      if (
+        state.requestId !== undefined &&
+        current.requestId !== undefined &&
+        state.requestId < current.requestId
+      ) {
+        return s
+      }
       // Why: the sidebar resolves the MR's project asynchronously, so an early patch
       // must not blank a ref we already know.
+      const githubRepository = state.githubRepository ?? current.githubRepository ?? null
       const gitlabProjectRef = state.gitlabProjectRef ?? current.gitlabProjectRef ?? null
       const nextCheckRunDetails: OpenCheckRunDetailsState = {
         contextKey,
         check,
+        requestId: state.requestId ?? current.requestId,
         details: state.details,
         loading: state.loading,
         error: state.error,
+        githubRepository,
         gitlabProjectRef
       }
       if (
         current.contextKey === nextCheckRunDetails.contextKey &&
+        current.requestId === nextCheckRunDetails.requestId &&
         current.check.status === nextCheckRunDetails.check.status &&
         current.check.conclusion === nextCheckRunDetails.check.conclusion &&
         current.loading === nextCheckRunDetails.loading &&
         current.error === nextCheckRunDetails.error &&
         current.details === nextCheckRunDetails.details &&
+        isSameGitHubRepository(current.githubRepository ?? null, githubRepository) &&
         isSameGitLabProjectRef(current.gitlabProjectRef ?? null, gitlabProjectRef)
       ) {
         return s
@@ -3894,15 +3921,24 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
     if (!file || file.mode !== 'check-details' || !checkRunDetails) {
       return
     }
+    const { contextKey, check } = checkRunDetails
+    const requestId = createCheckRunDetailsRequestId()
+    const patch = (next: CheckRunDetailsTabPatch): void => {
+      get().patchOpenCheckRunDetails(file.worktreeId, contextKey, check, { ...next, requestId })
+    }
     const worktree = findWorktreeById(state.worktreesByRepo, file.worktreeId)
     const repoId = worktree?.repoId ?? getRepoIdFromWorktreeId(file.worktreeId)
     const repo = state.repos.find((candidate) => candidate.id === repoId)
     if (!repo?.path) {
+      patch({
+        details: checkRunDetails.details,
+        loading: false,
+        error: translate(
+          'auto.store.slices.editor.checkRunDetailsRepoUnavailable',
+          'Repository details are unavailable for this check.'
+        )
+      })
       return
-    }
-    const { contextKey, check } = checkRunDetails
-    const patch = (next: CheckRunDetailsTabPatch): void => {
-      get().patchOpenCheckRunDetails(file.worktreeId, contextKey, check, next)
     }
     patch({ details: checkRunDetails.details, loading: true, error: null })
     try {
@@ -3924,7 +3960,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
               workflowRunId: check.workflowRunId,
               checkName: check.name,
               url: check.url,
-              prRepo: null
+              prRepo: checkRunDetails.githubRepository ?? null
             },
             { repoId: repo.id }
           )
@@ -4086,6 +4122,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
   gitStatusByWorktree: {},
   gitStatusHeadByWorktree: {},
   gitStatusHugeByWorktree: {},
+  gitBranchLineTotalByWorktree: {},
   gitIgnoredPathsByWorktree: {},
   gitConflictOperationByWorktree: {},
   trackedConflictPathsByWorktree: {},
@@ -4187,6 +4224,32 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       const prevHuge = s.gitStatusHugeByWorktree[worktreeId]
       const nextHuge = status.didHitLimit ? { limit: nextEntries.length } : undefined
       const hugeUnchanged = (prevHuge?.limit ?? null) === (nextHuge?.limit ?? null)
+
+      const prevBranchLineTotal = s.gitBranchLineTotalByWorktree[worktreeId] ?? null
+      // Why: an omitted field means "not computed on this pass" — soft-deadline
+      // miss, cooldown, old host — not "zero", so dropping it blanks a published
+      // chip between polls. Staleness is handled where it can be: the host
+      // carries its cache forward, and SourceControl hides any total whose
+      // mergeBase no longer matches the fork point. A capped listing skips the
+      // ranged diff outright, so nothing will refresh it — clear it there.
+      const nextBranchLineTotal = status.didHitLimit
+        ? null
+        : (status.branchLineTotal ?? prevBranchLineTotal)
+      const branchLineTotalUnchanged =
+        prevBranchLineTotal === nextBranchLineTotal ||
+        (prevBranchLineTotal !== null &&
+          nextBranchLineTotal !== null &&
+          prevBranchLineTotal.added === nextBranchLineTotal.added &&
+          prevBranchLineTotal.removed === nextBranchLineTotal.removed &&
+          prevBranchLineTotal.mergeBase === nextBranchLineTotal.mergeBase &&
+          (prevBranchLineTotal.test?.added ?? null) === (nextBranchLineTotal.test?.added ?? null) &&
+          (prevBranchLineTotal.test?.removed ?? null) ===
+            (nextBranchLineTotal.test?.removed ?? null) &&
+          (prevBranchLineTotal.generated?.added ?? null) ===
+            (nextBranchLineTotal.generated?.added ?? null) &&
+          (prevBranchLineTotal.generated?.removed ?? null) ===
+            (nextBranchLineTotal.generated?.removed ?? null))
+
       const prevStatusHead = s.gitStatusHeadByWorktree[worktreeId]
       const nextStatusHead = getKnownGitHead(status.head)
       const statusHeadUnchanged = prevStatusHead === nextStatusHead
@@ -4206,11 +4269,22 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         operationUnchanged &&
         ignoredUnchanged &&
         hugeUnchanged &&
+        branchLineTotalUnchanged &&
         statusHeadUnchanged &&
         !shouldInvalidateBranchCompare
       ) {
         return s
       }
+
+      const nextBranchLineTotalMap = branchLineTotalUnchanged
+        ? s.gitBranchLineTotalByWorktree
+        : nextBranchLineTotal
+          ? { ...s.gitBranchLineTotalByWorktree, [worktreeId]: nextBranchLineTotal }
+          : (() => {
+              const copy = { ...s.gitBranchLineTotalByWorktree }
+              delete copy[worktreeId]
+              return copy
+            })()
 
       const nextHugeMap = hugeUnchanged
         ? s.gitStatusHugeByWorktree
@@ -4244,6 +4318,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       return {
         openFiles: nextOpenFiles,
         gitStatusHugeByWorktree: nextHugeMap,
+        gitBranchLineTotalByWorktree: nextBranchLineTotalMap,
         gitStatusHeadByWorktree: nextStatusHeadMap,
         gitStatusByWorktree: statusUnchanged
           ? s.gitStatusByWorktree

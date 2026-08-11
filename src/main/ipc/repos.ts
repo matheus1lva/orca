@@ -1512,7 +1512,10 @@ export function registerRepoHandlers(mainWindow: BrowserWindow, store: Store): v
         { getSshFilesystemProvider }
       )
       assertFolderWorkspacePathUsable(status)
-      const workspace = store.createFolderWorkspace(args)
+      const workspace = store.createFolderWorkspace({
+        ...args,
+        creatorProvenance: { kind: 'host' }
+      })
       notifyReposChanged(mainWindow)
       return workspace
     }

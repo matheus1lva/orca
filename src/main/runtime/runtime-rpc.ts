@@ -184,6 +184,7 @@ const MOBILE_RPC_METHOD_ALLOWLIST = new Set([
   'accounts.subscribe',
   'accounts.unsubscribe',
   'aiVault.listSessions',
+  'aiVault.resolveSessionTitles',
   'aiVault.prepareSessionResume',
   'browser.back',
   'browser.dialogAccept',
@@ -715,6 +716,7 @@ export class OrcaRuntimeRpcServer {
       endpoint,
       deviceToken: device.token,
       publicKeyB64,
+      pairedDeviceId: device.deviceId,
       scope
     })
     return {
@@ -927,6 +929,7 @@ export class OrcaRuntimeRpcServer {
         endpoint: direct.endpoint,
         deviceToken: device.token,
         publicKeyB64,
+        pairedDeviceId: device.deviceId,
         scope: 'mobile',
         relay: relayPairing.relay
       })

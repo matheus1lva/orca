@@ -4110,6 +4110,73 @@ describe('ClaudeRuntimeAuthService', () => {
     }
   })
 
+  it('allows an assigned account while a system-default global Claude is live', async () => {
+    const pinnedAuthPath = createManagedClaudeAuth(
+      testState.userDataDir,
+      'account-b',
+      createClaudeCredentialsJson('b@example.com', 'token-b')
+    )
+    const settings = createSettings({
+      claudeManagedAccounts: [createClaudeAccount('account-b', pinnedAuthPath)],
+      activeClaudeManagedAccountId: null
+    })
+    const store = createStore(settings)
+    const { markClaudePtyExited, markClaudePtySpawned } = await import('./live-pty-gate')
+    markClaudePtySpawned('global-pty')
+    try {
+      const { ClaudeRuntimeAuthService } = await import('./runtime-auth-service')
+      const { releaseInjectedClaudeAccountLaunch } = await import('./live-pty-gate')
+      const service = new ClaudeRuntimeAuthService(store as never)
+
+      const preparation = await service.prepareForClaudeLaunch(
+        { runtime: 'host', overrideAccountId: 'account-b' },
+        { reservePtyAccount: true }
+      )
+      expect(preparation.injectedAccountId).toBe('account-b')
+      expect(preparation.injectedAccountReservationId).toEqual(expect.any(String))
+      releaseInjectedClaudeAccountLaunch(preparation.injectedAccountReservationId)
+    } finally {
+      markClaudePtyExited('global-pty')
+    }
+  })
+
+  it('allows an assigned account while a global Claude owns a different account', async () => {
+    const accountAPath = createManagedClaudeAuth(
+      testState.userDataDir,
+      'account-a',
+      createClaudeCredentialsJson('a@example.com', 'token-a')
+    )
+    const accountBPath = createManagedClaudeAuth(
+      testState.userDataDir,
+      'account-b',
+      createClaudeCredentialsJson('b@example.com', 'token-b')
+    )
+    const settings = createSettings({
+      claudeManagedAccounts: [
+        createClaudeAccount('account-a', accountAPath),
+        createClaudeAccount('account-b', accountBPath)
+      ],
+      activeClaudeManagedAccountId: 'account-a'
+    })
+    const store = createStore(settings)
+    const { markClaudePtyExited, markClaudePtySpawned } = await import('./live-pty-gate')
+    markClaudePtySpawned('global-a-pty', 'account-a')
+    try {
+      const { ClaudeRuntimeAuthService } = await import('./runtime-auth-service')
+      const { releaseInjectedClaudeAccountLaunch } = await import('./live-pty-gate')
+      const service = new ClaudeRuntimeAuthService(store as never)
+
+      const preparation = await service.prepareForClaudeLaunch(
+        { runtime: 'host', overrideAccountId: 'account-b' },
+        { reservePtyAccount: true }
+      )
+      expect(preparation.injectedAccountId).toBe('account-b')
+      releaseInjectedClaudeAccountLaunch(preparation.injectedAccountReservationId)
+    } finally {
+      markClaudePtyExited('global-a-pty')
+    }
+  })
+
   it('refuses to materialize shared auth while the same injected account is live', async () => {
     const managedAuthPath = createManagedClaudeAuth(
       testState.userDataDir,

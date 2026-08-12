@@ -160,6 +160,22 @@ describe('Claude live PTY gate', () => {
     expect(hasLiveSharedClaudePtysForAccount('account-b')).toBe(true)
   })
 
+  it('does not treat a system-default shared Claude as owning a different assigned account', () => {
+    markClaudePtySpawned('live-claude-pty')
+
+    const systemDefaultReservation = reserveInjectedClaudeAccountLaunch('account-b', {
+      currentGlobalAccountId: null
+    })
+    releaseInjectedClaudeAccountLaunch(systemDefaultReservation)
+    const otherAccountReservation = reserveInjectedClaudeAccountLaunch('account-b', {
+      currentGlobalAccountId: 'account-a'
+    })
+    releaseInjectedClaudeAccountLaunch(otherAccountReservation)
+    expect(() => reserveInjectedClaudeAccountLaunch('account-a')).toThrow(
+      'already in use by a global terminal'
+    )
+  })
+
   it('persists spawns and exits when persistence is attached', () => {
     const addClaudeLivePtySessionId = vi.fn()
     const removeClaudeLivePtySessionId = vi.fn()

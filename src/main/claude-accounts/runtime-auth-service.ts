@@ -26,11 +26,11 @@ import { buildEncodedWslBashCommand } from '../wsl-bash-command'
 import {
   hasLiveClaudePtys,
   hasLiveInjectedClaudePtysForAccount,
-  hasLiveSharedClaudePtysForAccount,
   releaseInjectedClaudeAccountLaunch,
   releaseSharedClaudeAccountLaunch,
   reserveInjectedClaudeAccountLaunch,
-  reserveSharedClaudeAccountLaunch
+  reserveSharedClaudeAccountLaunch,
+  sharedClaudePtyOwnsAccountForInjectedLaunch
 } from './live-pty-gate'
 import { isOauthTokenExpiring, refreshClaudeOauthCredentials } from './oauth-refresh'
 import { ClaudeRuntimePathResolver } from './runtime-paths'
@@ -152,7 +152,11 @@ export class ClaudeRuntimeAuthService {
     )
     const settings = this.store.getSettings()
     const injectedCandidate = this.resolveInjectedAccountCandidate(effectiveTarget, settings)
-    if (injectedCandidate && hasLiveSharedClaudePtysForAccount(injectedCandidate.id)) {
+    const currentGlobalAccountId = getSelectedClaudeAccountIdForTarget(settings, effectiveTarget)
+    if (
+      injectedCandidate &&
+      sharedClaudePtyOwnsAccountForInjectedLaunch(injectedCandidate.id, currentGlobalAccountId)
+    ) {
       // Why: the shared CLI already owns this account's refresh chain. Starting
       // an isolated pinned copy before it exits would fork the one-use token.
       throw new Error(
@@ -161,13 +165,11 @@ export class ClaudeRuntimeAuthService {
     }
     const reservationId =
       injectedCandidate && options?.reservePtyAccount
-        ? reserveInjectedClaudeAccountLaunch(injectedCandidate.id)
+        ? reserveInjectedClaudeAccountLaunch(injectedCandidate.id, { currentGlobalAccountId })
         : undefined
     const sharedReservationId =
       !injectedCandidate && !effectiveTarget?.overrideAccountId && options?.reservePtyAccount
-        ? reserveSharedClaudeAccountLaunch(
-            getSelectedClaudeAccountIdForTarget(settings, effectiveTarget)
-          )
+        ? reserveSharedClaudeAccountLaunch(currentGlobalAccountId)
         : undefined
     try {
       const injectedAccount = await this.resolveInjectedAccount(effectiveTarget, settings)

@@ -225,6 +225,24 @@ export function hasLiveSharedClaudePtysForAccount(accountId: string): boolean {
   )
 }
 
+export type InjectedClaudeLaunchReservationOptions = {
+  currentGlobalAccountId: string | null
+}
+
+export function sharedClaudePtyOwnsAccountForInjectedLaunch(
+  accountId: string,
+  currentGlobalAccountId: string | null
+): boolean {
+  return [...liveSharedClaudePtyAccounts.values()].some((liveAccountId) => {
+    if (liveAccountId === accountId) {
+      return true
+    }
+    // Why: a null binding is either system-default ~/.claude or a lost
+    // identity. Only the current global selection can still share that store.
+    return liveAccountId === null && currentGlobalAccountId === accountId
+  })
+}
+
 export function hasLiveInjectedClaudePtysForAccount(accountId: string): boolean {
   return (
     [...liveInjectedClaudePtyAccounts.values()].includes(accountId) ||
@@ -236,7 +254,10 @@ export function getLiveInjectedClaudePtyAccountId(ptyId: string): string | null 
   return liveInjectedClaudePtyAccounts.get(ptyId) ?? null
 }
 
-export function reserveInjectedClaudeAccountLaunch(accountId: string): string {
+export function reserveInjectedClaudeAccountLaunch(
+  accountId: string,
+  options?: InjectedClaudeLaunchReservationOptions
+): string {
   if (managedClaudeAccountMutations.has(accountId)) {
     throw new Error('This Claude account is being changed. Try again when the change finishes.')
   }
@@ -247,7 +268,11 @@ export function reserveInjectedClaudeAccountLaunch(accountId: string): string {
   ) {
     throw new Error('This Claude account is being launched globally. Try again when it finishes.')
   }
-  if (hasLiveSharedClaudePtysForAccount(accountId)) {
+  const sharedPtyOwnsAccount =
+    options === undefined
+      ? hasLiveSharedClaudePtysForAccount(accountId)
+      : sharedClaudePtyOwnsAccountForInjectedLaunch(accountId, options.currentGlobalAccountId)
+  if (sharedPtyOwnsAccount) {
     throw new Error(
       'This Claude account is already in use by a global terminal. Close it before launching the assigned account.'
     )

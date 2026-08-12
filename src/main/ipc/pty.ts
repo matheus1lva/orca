@@ -13,7 +13,7 @@ import {
 } from 'electron'
 export { getBashShellReadyRcfileContent } from '../providers/local-pty-shell-ready'
 import type { OrcaRuntimeService } from '../runtime/orca-runtime'
-import type { Store } from '../persistence'
+import type { PtyBindingSourceExpectation, Store } from '../persistence'
 import { retireTerminalSurfaceFromPersistence } from '../runtime/mobile-session-terminal-persistence-retirement'
 import type { GlobalSettings, TuiAgent } from '../../shared/types'
 import { toSshExecutionHostId } from '../../shared/execution-host'
@@ -70,6 +70,7 @@ import {
 } from '../../shared/pi-agent-kind'
 import { isPwshAvailableAsync } from '../pwsh'
 import { LocalPtyProvider } from '../providers/local-pty-provider'
+import { normalizeWindowsTerminalCwd } from '../providers/windows-shell-args'
 import type { IPtyProvider, PtySpawnOptions, PtySpawnResult } from '../providers/types'
 import { isPtyWriteUnavailableError } from '../providers/pty-write-unavailable-error'
 import { REQUIRED_PTY_REATTACH_UNAVAILABLE } from '../providers/pty-reattach-contract'
@@ -97,7 +98,11 @@ import {
 import { resolveWslSessionContext } from '../daemon/wsl-session-context'
 import { addNodePtyRecoveryHint } from '../daemon/node-pty-error-hints'
 import { recordDaemonStreamBacklogEvent } from '../daemon/daemon-stream-backlog-probe'
-import { TerminalSessionOwnerUnverifiedError } from '../daemon/daemon-errors'
+import {
+  isDaemonEndpointGoneError,
+  TerminalHostGoneError,
+  TerminalSessionOwnerUnverifiedError
+} from '../daemon/daemon-errors'
 import type { ClaudeRuntimeAuthPreparation } from '../claude-accounts/runtime-auth-service'
 import {
   type ClaudeAccountSelectionTarget,
@@ -140,7 +145,7 @@ import {
 import { isRemoteAgentHooksEnabled } from '../../shared/agent-hook-relay'
 import { createTerminalSessionStateSaveFailureMessage } from '../../shared/terminal-session-state-save-failure'
 import { RendererTerminalSerializerReadiness } from './renderer-terminal-serializer-readiness'
-import { readShellStartupEnvVar } from '../pty/shell-startup-env'
+import { readSessionShellStartupEnvVar } from '../pty/shell-startup-env'
 import {
   isTerminalLeafId,
   makePaneKey,
@@ -148,6 +153,7 @@ import {
   parsePaneKey
 } from '../../shared/stable-pane-id'
 import { isValidTerminalTabId } from '../../shared/terminal-tab-id'
+import { parseTerminalKittyKeyboardFlags } from '../../shared/terminal-kitty-keyboard-flags'
 import {
   resolveTerminalStartupCwdForWorkspace,
   type TerminalStartupCwdMissingDirFallback
@@ -861,6 +867,10 @@ async function attachStablePaneOwner(
   } catch (error) {
     if (error instanceof TerminalSessionOwnerUnverifiedError) {
       throw new Error('terminal_pane_owner_unverified')
+    }
+    // Why: translate before paired-runtime RPC strips the socket error's code and syscall.
+    if (isDaemonEndpointGoneError(error)) {
+      throw new TerminalHostGoneError()
     }
     if (!isPtyAlreadyGoneError(error)) {
       throw error
@@ -1646,11 +1656,7 @@ function resolvePiAgentSourceDir(
   if (kind === 'prime-agent') {
     return (
       readEnvWithProcessFallback(baseEnv, primaryKey) ??
-      readShellStartupEnvVar(
-        primaryKey,
-        baseEnv.HOME ?? process.env.HOME,
-        baseEnv.SHELL ?? process.env.SHELL
-      )
+      readSessionShellStartupEnvVar(primaryKey, baseEnv)
     )
   }
 
@@ -1665,11 +1671,7 @@ function resolvePiAgentSourceDir(
     return publicDir
   }
 
-  return readShellStartupEnvVar(
-    primaryKey,
-    baseEnv.HOME ?? process.env.HOME,
-    baseEnv.SHELL ?? process.env.SHELL
-  )
+  return readSessionShellStartupEnvVar(primaryKey, baseEnv)
 }
 
 function resolveScopedPiAgentSourceDir(
@@ -1719,11 +1721,6 @@ function exposePiManagedExtensionEnv(
       baseEnv.ORCA_PRIME_AGENT_SOURCE_AGENT_DIR = managedEnv.ORCA_PRIME_AGENT_SOURCE_AGENT_DIR
     } else {
       delete baseEnv.ORCA_PRIME_AGENT_SOURCE_AGENT_DIR
-    }
-    if (managedEnv.ORCA_PRIME_AGENT_STATUS_EXTENSION) {
-      baseEnv.ORCA_PRIME_AGENT_STATUS_EXTENSION = managedEnv.ORCA_PRIME_AGENT_STATUS_EXTENSION
-    } else {
-      delete baseEnv.ORCA_PRIME_AGENT_STATUS_EXTENSION
     }
     return
   }
@@ -1823,14 +1820,7 @@ function resolveOpenCodeSourceConfigDir(baseEnv: Record<string, string>): string
     return undefined
   }
 
-  return (
-    configDir ??
-    readShellStartupEnvVar(
-      'OPENCODE_CONFIG_DIR',
-      baseEnv.HOME ?? process.env.HOME,
-      baseEnv.SHELL ?? process.env.SHELL
-    )
-  )
+  return configDir ?? readSessionShellStartupEnvVar('OPENCODE_CONFIG_DIR', baseEnv)
 }
 
 /**
@@ -1867,8 +1857,6 @@ export function buildPtyHostEnv(
   })
 
   const shouldPrepareOmpShadow = piAgentKind === 'omp' || !hasLaunchCommand
-  const shouldPreparePrimeStatus =
-    piAgentKind === 'prime-agent' || (opts.isWsl && !hasLaunchCommand)
   // Why: source shadows are agent-scoped; trusting the other kind's source reintroduces Pi/OMP extension-state shadowing.
   const preexistingPiAgentDir = resolvePiAgentSourceDir(baseEnv, 'pi')
   const preexistingOmpAgentDir =
@@ -1927,12 +1915,6 @@ export function buildPtyHostEnv(
     if (opts.isWsl === true) {
       // Why: hook POSTs to 127.0.0.1 die inside WSL's NAT namespace; use the guest-resident relay's endpoint instead of the Windows one.
       const distro = opts.wslDistro ?? null
-      const hookInstance = wslHookRelayManager.getInstanceKey()
-      if (hookInstance) {
-        baseEnv.ORCA_WSL_HOOK_INSTANCE = hookInstance
-      } else {
-        delete baseEnv.ORCA_WSL_HOOK_INSTANCE
-      }
       wslHookRelayManager.ensureForDistro(distro)
       const guestEndpoint = wslHookRelayManager.getGuestEndpointFilePath(distro)
       if (guestEndpoint) {
@@ -1979,14 +1961,13 @@ export function buildPtyHostEnv(
       exposePiManagedExtensionEnv(baseEnv, 'omp', ompEnv)
     }
 
-    if (shouldPreparePrimeStatus) {
-      // Why: the Windows host cannot safely resolve or write Prime's guest
-      // config root; WSL loads the host-managed status file explicitly.
-      const primeEnv = opts.isWsl
-        ? piTitlebarExtensionService.buildStatusOnlyPtyEnv('prime-agent')
-        : piTitlebarExtensionService.buildPtyEnv(id, preexistingPrimeAgentDir, 'prime-agent', {
-            materializeDefaultHome: explicitPiAgentKind === 'prime-agent'
-          })
+    if (piAgentKind === 'prime-agent' && !opts.isWsl) {
+      const primeEnv = piTitlebarExtensionService.buildPtyEnv(
+        id,
+        preexistingPrimeAgentDir,
+        'prime-agent',
+        { materializeDefaultHome: explicitPiAgentKind === 'prime-agent' }
+      )
       Object.assign(baseEnv, primeEnv)
       exposePiManagedExtensionEnv(baseEnv, 'prime-agent', primeEnv)
     }
@@ -4442,6 +4423,7 @@ export function registerPtyHandlers(
     rows: number
     seq?: number
     lastTitle?: string
+    kittyKeyboardFlags?: number
   } | null
   const pendingSerializeRequests = new Map<
     string,
@@ -4470,6 +4452,7 @@ export function registerPtyHandlers(
           rows?: unknown
           seq?: unknown
           lastTitle?: unknown
+          kittyKeyboardFlags?: unknown
         } | null
       }
     ) => {
@@ -4489,6 +4472,7 @@ export function registerPtyHandlers(
           rows: number
           seq?: number
           lastTitle?: string
+          kittyKeyboardFlags?: number
         } = {
           data: snapshot.data,
           cols: snapshot.cols,
@@ -4499,6 +4483,12 @@ export function registerPtyHandlers(
         }
         if (typeof snapshot.lastTitle === 'string' && snapshot.lastTitle.length > 0) {
           result.lastTitle = snapshot.lastTitle
+        }
+        // Why gated on seq: without a boundary the flags cannot be reconciled
+        // against live bytes, so they prove nothing.
+        const kittyKeyboardFlags = parseTerminalKittyKeyboardFlags(snapshot.kittyKeyboardFlags)
+        if (result.seq !== undefined && kittyKeyboardFlags !== undefined) {
+          result.kittyKeyboardFlags = kittyKeyboardFlags
         }
         settleSerializeRequest(args.requestId, result)
       } else {
@@ -5028,6 +5018,7 @@ export function registerPtyHandlers(
         worktreeId: string
         tabId: string
         leafId: string
+        expectedSourceBinding?: PtyBindingSourceExpectation
       } | null = null
       if (shouldPersistHostSessionBinding) {
         if (
@@ -5046,7 +5037,10 @@ export function registerPtyHandlers(
           store,
           worktreeId: args.worktreeId,
           tabId: args.tabId,
-          leafId: args.leafId
+          leafId: args.leafId,
+          ...(args.expectedSourceBinding
+            ? { expectedSourceBinding: args.expectedSourceBinding }
+            : {})
         }
       }
       const sshScopedEnv = stripRemotePaneEnvWhenHooksDisabled(args.connectionId, args.env)
@@ -5353,6 +5347,15 @@ export function registerPtyHandlers(
       let stablePaneBindingPersisted = false
       let rejectedRegistrationCandidate: PtySpawnResult | null = null
       let pendingRegistrationPtyId: string | null = null
+      // Why hoisted to the reply scope: main reconciles the provider sequence
+      // deep inside the spawn path, but the pane needs that renderer-domain
+      // boundary beside the daemon snapshot's kitty flags.
+      let reconciledSnapshotSeq: number | null = null
+      // False when bytes crossed the data socket during the spawn RPC: the
+      // reconciled boundary covers them, but the daemon proved its kitty flags
+      // before they existed, so the claim must not erase what the pane may
+      // have scanned from those bytes live.
+      let snapshotKittyFlagsCoverReconciledSeq = true
       let preparedProvisionalExecutionContext = false
       let releaseWorktreeSpawn: (() => void) | undefined
       try {
@@ -5503,11 +5506,19 @@ export function registerPtyHandlers(
           // Why: admission precedes sequence/context state and every durable publication below.
           runtime?.assertPtyRegistrationAllowed?.(result.id, result.incarnationId)
           if (result.providerSequence) {
-            runtime?.synchronizePtyOutputSequenceFromProvider?.(
-              result.id,
-              result.providerSequence,
-              sequenceBeforeProviderSpawn
-            )
+            const runtimeSequenceBeforeReconcile = runtime?.getPtyOutputSequence?.(result.id) ?? 0
+            // Why kept: this is the reattach boundary in the RENDERER's sequence
+            // domain, and the daemon snapshot's kitty flags mean nothing without
+            // the boundary they were proven at.
+            reconciledSnapshotSeq =
+              runtime?.synchronizePtyOutputSequenceFromProvider?.(
+                result.id,
+                result.providerSequence,
+                sequenceBeforeProviderSpawn
+              ) ?? null
+            if (runtimeSequenceBeforeReconcile > sequenceBeforeProviderSpawn) {
+              snapshotKittyFlagsCoverReconciledSeq = false
+            }
           }
           ensureWslHookRelayForReattach(result, args.connectionId)
           runtime?.preparePtyExecutionContext?.(
@@ -5699,15 +5710,19 @@ export function registerPtyHandlers(
                       ? existingSharedAccountId
                       : (claudeAuth?.sharedAccountId ?? null)
                   }
+                : {}),
+              ...(hostSessionBinding.expectedSourceBinding
+                ? { expectedSourceBinding: hostSessionBinding.expectedSourceBinding }
                 : {})
             }
-            if (args.connectionId) {
-              didPersistClaudeBinding = hostSessionBinding.store.persistPtyBinding(
-                binding,
-                toSshExecutionHostId(args.connectionId)
-              )
-            } else {
-              didPersistClaudeBinding = hostSessionBinding.store.persistPtyBinding(binding)
+            didPersistClaudeBinding = args.connectionId
+              ? hostSessionBinding.store.persistPtyBinding(
+                  binding,
+                  toSshExecutionHostId(args.connectionId)
+                )
+              : hostSessionBinding.store.persistPtyBinding(binding)
+            if (didPersistClaudeBinding === false) {
+              throw new Error('terminal_split_source_not_found')
             }
           } catch (err) {
             console.error('[pty] failed to persist runtime PTY binding after spawn:', err)
@@ -5719,6 +5734,9 @@ export function registerPtyHandlers(
                 console.warn('[pty] failed to clean up PTY after persistence failure:', shutdownErr)
               }
               clearProviderPtyState(result.id)
+            }
+            if (err instanceof Error && err.message === 'terminal_split_source_not_found') {
+              throw err
             }
             throw Object.assign(new Error(createTerminalSessionStateSaveFailureMessage()), {
               agentSessionOperationOutcome: 'unknown' as const
@@ -5878,6 +5896,11 @@ export function registerPtyHandlers(
         }
         resolvePaneSpawnReservation(paneSpawnReservationKey, paneSpawnReservation, {
           ...result,
+          ...(typeof result.snapshotKittyKeyboardFlags === 'number' &&
+          reconciledSnapshotSeq !== null &&
+          snapshotKittyFlagsCoverReconciledSeq
+            ? { snapshotSeq: reconciledSnapshotSeq }
+            : { snapshotKittyKeyboardFlags: undefined }),
           isReattach: true
         })
         return response
@@ -6254,6 +6277,7 @@ export function registerPtyHandlers(
       alternateScreen?: boolean
       scrollbackAnsi?: string
       pendingEscapeTailAnsi?: string
+      kittyKeyboardFlags?: number
     } | null> => {
       if (!runtime || typeof args?.id !== 'string' || args.id.length === 0) {
         return null
@@ -6393,83 +6417,9 @@ export function registerPtyHandlers(
       if (startupPromise) {
         await startupPromise
       }
-      // Why: honor the fallback only for fresh local spawns — reattach needs exact cwd and SSH can't probe the local filesystem.
-      const requestedMissingCwdFallback =
-        !args.connectionId && !args.sessionId && args.cwdFallback === 'worktree'
-      const isWslOwnedPosixCwd =
-        args.cwd?.startsWith('/') === true && !/^\/[A-Za-z](?:\/|$)/.test(args.cwd)
-      const startupWorkspaceCwd =
-        requestedMissingCwdFallback && isWslOwnedPosixCwd
-          ? resolvePtySpawnStartupCwd(args.worktreeId, '.')
-          : undefined
-      const initiallyResolvedStartupCwd =
-        requestedMissingCwdFallback && isWslOwnedPosixCwd
-          ? resolvePtySpawnStartupCwd(args.worktreeId, args.cwd)
-          : undefined
-      const startupTerminalRuntimeOptions =
-        requestedMissingCwdFallback && process.platform === 'win32'
-          ? resolveLocalWindowsTerminalRuntimeOptions({
-              requestedShellOverride: args.shellOverride,
-              settings: getSettings?.(),
-              projectRuntime: args.projectRuntime,
-              fallbackHostShell: process.env.COMSPEC || 'powershell.exe'
-            })
-          : undefined
-      const wslRuntimeOwnsStartupCwd =
-        requestedMissingCwdFallback &&
-        isWslOwnedPosixCwd &&
-        (isWslShellName(startupTerminalRuntimeOptions?.shellOverride) ||
-          isWslUncPath(startupWorkspaceCwd ?? ''))
-      const startupWslContext = wslRuntimeOwnsStartupCwd
-        ? resolveWslSessionContext({
-            cwd: startupWorkspaceCwd,
-            shellOverride: startupTerminalRuntimeOptions?.shellOverride,
-            terminalWindowsWslDistro: startupTerminalRuntimeOptions?.terminalWindowsWslDistro
-          })
-        : undefined
-      let wslStartupCwdExists: boolean | null = null
-      let wslWorkspaceCwdExists: boolean | null = null
-      if (startupWslContext && initiallyResolvedStartupCwd) {
-        const validationCwd = toWindowsWslPath(
-          initiallyResolvedStartupCwd,
-          startupWslContext.distro
-        )
-        wslStartupCwdExists = isWslUncPath(validationCwd)
-          ? await wslUncDirectoryExistsAsync(validationCwd)
-          : localStartupCwdDirectoryExists(validationCwd)
-        if (wslStartupCwdExists === false && startupWorkspaceCwd) {
-          wslWorkspaceCwdExists = isWslUncPath(startupWorkspaceCwd)
-            ? await wslUncDirectoryExistsAsync(startupWorkspaceCwd)
-            : localStartupCwdDirectoryExists(startupWorkspaceCwd)
-        }
-      }
-      const allowMissingCwdFallback =
-        requestedMissingCwdFallback &&
-        (!wslRuntimeOwnsStartupCwd ||
-          (wslStartupCwdExists === false && wslWorkspaceCwdExists === true))
-      let didFallbackToWorkspaceRootCwd = false
-      const cwd = resolvePtySpawnStartupCwd(
-        args.worktreeId,
-        args.cwd,
-        allowMissingCwdFallback
-          ? {
-              directoryExists: (path) =>
-                startupWslContext &&
-                wslStartupCwdExists === false &&
-                path === initiallyResolvedStartupCwd
-                  ? false
-                  : startupWslContext && path === startupWorkspaceCwd
-                    ? wslWorkspaceCwdExists === true
-                    : localStartupCwdDirectoryExists(path),
-              onFallbackToWorkspaceRoot: () => {
-                didFallbackToWorkspaceRootCwd = true
-              }
-            }
-          : undefined
-      )
-      const startupCwdFallback =
-        didFallbackToWorkspaceRootCwd && cwd ? ({ kind: 'worktree', cwd } as const) : undefined
-      spawnTiming.mark('preflight')
+      let cwd = resolvePtySpawnStartupCwd(args.worktreeId, args.cwd)
+      let prevalidatedCwd: string | undefined
+      let startupCwdFallback: { kind: 'worktree'; cwd: string } | undefined
       const earlyLeafId =
         typeof args.leafId === 'string' && isTerminalLeafId(args.leafId) ? args.leafId : null
       const earlyPaneKey =
@@ -6513,6 +6463,15 @@ export function registerPtyHandlers(
       let stablePaneBindingPersisted = false
       let rejectedRegistrationCandidate: PtySpawnResult | null = null
       let pendingRegistrationPtyId: string | null = null
+      // Why hoisted to the reply scope: main reconciles the provider sequence
+      // deep inside the spawn path, but the pane needs that renderer-domain
+      // boundary beside the daemon snapshot's kitty flags.
+      let reconciledSnapshotSeq: number | null = null
+      // False when bytes crossed the data socket during the spawn RPC: the
+      // reconciled boundary covers them, but the daemon proved its kitty flags
+      // before they existed, so the claim must not erase what the pane may
+      // have scanned from those bytes live.
+      let snapshotKittyFlagsCoverReconciledSeq = true
       let preparedProvisionalExecutionContext = false
       let releaseWorktreeSpawn: (() => void) | undefined
       try {
@@ -6520,6 +6479,7 @@ export function registerPtyHandlers(
           await assertFolderWorkspacePtyPathUsable(args.worktreeId)
         }
         const provider = getProvider(args.connectionId)
+        spawnTiming.mark('stable_adoption_setup')
         const preAdoptedStablePane =
           earlyStablePaneOwner && earlyWorktreeId
             ? await adoptStablePane({
@@ -6533,9 +6493,97 @@ export function registerPtyHandlers(
                 ownsPaneSpawnReservation: true
               })
             : null
+        spawnTiming.mark('stable_adoption')
         if (earlyStablePaneOwner && !preAdoptedStablePane) {
           await assertFolderWorkspacePtyPathUsable(args.worktreeId)
         }
+        if (!preAdoptedStablePane) {
+          // Why: reattach needs exact cwd, SSH cannot probe locally, and successful stable-pane adoption needs no launch preflight.
+          const requestedMissingCwdFallback =
+            !args.connectionId && !args.sessionId && args.cwdFallback === 'worktree'
+          const isPosixStartupCwd = args.cwd?.startsWith('/') === true
+          const startupWorkspaceCwd =
+            requestedMissingCwdFallback && isPosixStartupCwd
+              ? resolvePtySpawnStartupCwd(args.worktreeId, '.')
+              : undefined
+          const initiallyResolvedStartupCwd =
+            requestedMissingCwdFallback && isPosixStartupCwd ? cwd : undefined
+          const startupTerminalRuntimeOptions =
+            requestedMissingCwdFallback && process.platform === 'win32'
+              ? resolveLocalWindowsTerminalRuntimeOptions({
+                  requestedShellOverride: args.shellOverride,
+                  settings: getSettings?.(),
+                  projectRuntime: args.projectRuntime,
+                  fallbackHostShell: process.env.COMSPEC || 'powershell.exe'
+                })
+              : undefined
+          const wslRuntimeOwnsStartupCwd =
+            requestedMissingCwdFallback &&
+            isPosixStartupCwd &&
+            (isWslShellName(startupTerminalRuntimeOptions?.shellOverride) ||
+              isWslUncPath(startupWorkspaceCwd ?? ''))
+          const startupWslContext = wslRuntimeOwnsStartupCwd
+            ? resolveWslSessionContext({
+                cwd: startupWorkspaceCwd,
+                shellOverride: startupTerminalRuntimeOptions?.shellOverride,
+                terminalWindowsWslDistro: startupTerminalRuntimeOptions?.terminalWindowsWslDistro
+              })
+            : undefined
+          let wslStartupCwdExists: boolean | null = null
+          let wslWorkspaceCwdExists: boolean | null = null
+          if (startupWslContext && initiallyResolvedStartupCwd) {
+            const validationCwd = toWindowsWslPath(
+              initiallyResolvedStartupCwd,
+              startupWslContext.distro
+            )
+            wslStartupCwdExists = isWslUncPath(validationCwd)
+              ? await wslUncDirectoryExistsAsync(validationCwd)
+              : localStartupCwdDirectoryExists(validationCwd)
+            if (wslStartupCwdExists === true) {
+              prevalidatedCwd = validationCwd
+            }
+            if (wslStartupCwdExists === false && startupWorkspaceCwd) {
+              wslWorkspaceCwdExists = isWslUncPath(startupWorkspaceCwd)
+                ? await wslUncDirectoryExistsAsync(startupWorkspaceCwd)
+                : localStartupCwdDirectoryExists(startupWorkspaceCwd)
+              if (wslWorkspaceCwdExists === true) {
+                prevalidatedCwd = startupWorkspaceCwd
+              }
+            }
+          }
+          const allowMissingCwdFallback =
+            requestedMissingCwdFallback &&
+            (!wslRuntimeOwnsStartupCwd ||
+              (wslStartupCwdExists === false && wslWorkspaceCwdExists === true))
+          let didFallbackToWorkspaceRootCwd = false
+          cwd = resolvePtySpawnStartupCwd(
+            args.worktreeId,
+            args.cwd,
+            allowMissingCwdFallback
+              ? {
+                  directoryExists: (path) =>
+                    startupWslContext &&
+                    wslStartupCwdExists === false &&
+                    path === initiallyResolvedStartupCwd
+                      ? false
+                      : startupWslContext && path === startupWorkspaceCwd
+                        ? wslWorkspaceCwdExists === true
+                        : localStartupCwdDirectoryExists(
+                            process.platform === 'win32' ? normalizeWindowsTerminalCwd(path) : path
+                          ),
+                  onFallbackToWorkspaceRoot: () => {
+                    didFallbackToWorkspaceRootCwd = true
+                  }
+                }
+              : undefined
+          )
+          if (didFallbackToWorkspaceRootCwd && wslWorkspaceCwdExists === true && cwd) {
+            prevalidatedCwd = cwd
+          }
+          startupCwdFallback =
+            didFallbackToWorkspaceRootCwd && cwd ? { kind: 'worktree', cwd } : undefined
+        }
+        spawnTiming.mark('preflight')
         const freshSpawnRecovery = preAdoptedStablePane
           ? undefined
           : recoverFreshSpawnProviderRouting(provider, args.connectionId, args.sessionId)
@@ -6934,6 +6982,7 @@ export function registerPtyHandlers(
           cols: args.cols,
           rows: args.rows,
           cwd,
+          ...(prevalidatedCwd && !isDaemonHostSpawn ? { prevalidatedCwd } : {}),
           env: spawnEnv,
           ...(isMintedSessionId ? { isNewSession: true } : {})
         }
@@ -7106,11 +7155,19 @@ export function registerPtyHandlers(
           assertSpawnReplyWasLive(result)
           runtime?.assertPtyRegistrationAllowed?.(result.id, result.incarnationId)
           if (result.providerSequence) {
-            runtime?.synchronizePtyOutputSequenceFromProvider?.(
-              result.id,
-              result.providerSequence,
-              sequenceBeforeProviderSpawn
-            )
+            const runtimeSequenceBeforeReconcile = runtime?.getPtyOutputSequence?.(result.id) ?? 0
+            // Why kept: this is the reattach boundary in the RENDERER's sequence
+            // domain, and the daemon snapshot's kitty flags mean nothing without
+            // the boundary they were proven at.
+            reconciledSnapshotSeq =
+              runtime?.synchronizePtyOutputSequenceFromProvider?.(
+                result.id,
+                result.providerSequence,
+                sequenceBeforeProviderSpawn
+              ) ?? null
+            if (runtimeSequenceBeforeReconcile > sequenceBeforeProviderSpawn) {
+              snapshotKittyFlagsCoverReconciledSeq = false
+            }
           }
           ensureWslHookRelayForReattach(result, args.connectionId)
           runtime?.preparePtyExecutionContext?.(
@@ -7558,6 +7615,13 @@ export function registerPtyHandlers(
         }
         const response = {
           ...result,
+          // Why both or neither: a pane can only adopt proven kitty flags together
+          // with the sequence boundary they describe.
+          ...(typeof result.snapshotKittyKeyboardFlags === 'number' &&
+          reconciledSnapshotSeq !== null &&
+          snapshotKittyFlagsCoverReconciledSeq
+            ? { snapshotSeq: reconciledSnapshotSeq }
+            : { snapshotKittyKeyboardFlags: undefined }),
           ...(!result.isReattach && effectiveLaunchConfig
             ? { launchConfig: effectiveLaunchConfig }
             : {}),
